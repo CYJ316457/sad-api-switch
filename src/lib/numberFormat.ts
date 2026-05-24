@@ -18,3 +18,16 @@ export function formatTokenCount(value: number | null | undefined): string {
 
   return String(numericValue);
 }
+
+export function formatTokenCountFixed(value: number | null | undefined): string {
+  const numericValue = value ?? 0;
+  const abs = Math.abs(numericValue);
+
+  for (const unit of TOKEN_UNITS) {
+    if (abs >= unit.value) {
+      return `${(numericValue / unit.value).toFixed(1)}${unit.suffix.toLowerCase()}`;
+    }
+  }
+
+  return String(numericValue);
+}

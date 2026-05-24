@@ -5,7 +5,7 @@ import { useEvent } from "@/lib/events";
 import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { useApiAdapter } from "@/lib/useApiAdapter";
-import { formatTokenCount } from "@/lib/numberFormat";
+import { formatTokenCount, formatTokenCountFixed } from "@/lib/numberFormat";
 import type { UsageLogFilter } from "@/types";
 
 interface UsageLogMeta {
@@ -249,7 +249,7 @@ export function LogPage() {
                     <td className="px-3 py-2 font-mono text-xs min-w-0"><div className="truncate" title={resolvedModel}>{resolvedModel}</div></td>
                     <td className="px-2 py-2 whitespace-nowrap"><div className="truncate" title={`${log.use_time || Math.ceil(log.latency_ms / 1000)}s${log.is_stream && log.first_token_ms > 0 ? ` / ${(log.first_token_ms / 1000).toFixed(1)}s` : ""}  ${log.is_stream ? t("log.streamShort") : t("log.nonStreamShort")}`}>{`${log.use_time || Math.ceil(log.latency_ms / 1000)}s${log.is_stream && log.first_token_ms > 0 ? `/${(log.first_token_ms / 1000).toFixed(1)}s` : ""}`}</div></td>
                     <td className="px-3 py-2 text-right leading-tight">
-                      <div>{formatTokenCount(log.prompt_tokens)}</div>
+                      <div>{formatTokenCountFixed(log.prompt_tokens)}</div>
                       {cacheReadTokens > 0 ? (
                         <>
                           <div className="text-[11px] text-muted-foreground">缓存读 {formatTokenCount(cacheReadTokens)}</div>
