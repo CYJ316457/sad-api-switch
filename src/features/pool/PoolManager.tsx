@@ -1,0 +1,1078 @@
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
+import { GripVertical, Plus, MessageSquare, RefreshCw, XCircle, X, Trash2, Check, ChevronsUpDown, Tag, Link2Off } from "lucide-react";
+import { toast } from "sonner";
+import { Card, CardContent } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { useApiAdapter } from "@/lib/useApiAdapter";
+import { useTauriEvent } from "@/lib/useTauriEvent";
+import { useEvent } from "@/lib/events";
+import { type ApiEntry, type Channel, type PaginatedResult } from "@/types";
+import { cn, formatResponseMs, parseResponseMs } from "@/lib/utils";
+import { TestChatDialog } from "@/components/proxy/TestChatDialog";
+import { getCatalogModel, getCatalogModelExact, getCatalogProviderLogo, formatTokenCount } from "@/lib/modelsCatalog";
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+
+function StatusDot({ state }: { state: string }) {
+  return (
+    <span
+      className={cn("inline-block h-2 w-2 rounded-full", {
+        "bg-green-500": state === "closed",
+        "bg-red-500": state === "open",
+        "bg-gray-400": state === "disabled",
+      })}
+    />
+  );
+}
+
+function formatReleaseDate(value?: string) {
+  if (!value) return null;
+  const compact = value.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (compact) return `${compact[1]}-${compact[2]}-${compact[3]}`;
+  const monthOnly = value.match(/^(\d{4})-(\d{2})$/);
+  if (monthOnly) return `${value}-01`;
+  return value;
+}
+
+function parseReleaseDateForSort(entry: ApiEntry): number | null {
+  const raw = entry.release_date?.trim();
+  if (!raw) return null;
+  const m1 = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m1) return new Date(raw).getTime();
+  const m2 = raw.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (m2) return new Date(`${m2[1]}-${m2[2]}-${m2[3]}`).getTime();
+  const m3 = raw.match(/^(\d{4})-(\d{2})$/);
+  if (m3) return new Date(`${raw}-01`).getTime();
+  return null;
+}
+
+function getEffectiveDownstreamModel(entry: ApiEntry): string {
+  return entry.model.trim() || entry.upstream_model?.trim() || "";
+}
+
+type CatalogDisplayMeta = {
+  logo: string;
+  releaseDate: string;
+  context: string;
+  output: string;
+  features: string[];
+  modelMetaZh: string;
+  modelMetaEn: string;
+};
+
+const zhFeatureLabels: Record<string, string> = {
+  imageGeneration: "生图",
+  imageUnderstanding: "识图",
+  audio: "音频",
+  video: "视频",
+  pdf: "PDF",
+  reasoning: "推理",
+  interleaved: "思维链",
+  toolCall: "工具调用",
+  structuredOutput: "结构输出",
+  attachment: "附件",
+  temperature: "温度",
+};
+const enFeatureLabels: Record<string, string> = {
+  imageGeneration: "Image Gen",
+  imageUnderstanding: "Vision",
+  audio: "Audio",
+  video: "Video",
+  pdf: "PDF",
+  reasoning: "Reasoning",
+  interleaved: "Reasoning Trace",
+  toolCall: "Tool Calling",
+  structuredOutput: "Struct Output",
+  attachment: "Attachment",
+  temperature: "Temperature",
+};
+
+function buildCatalogDisplayMeta(modelId: string): CatalogDisplayMeta {
+  const model = getCatalogModel(modelId);
+  if (!model) {
+    return {
+      logo: getCatalogProviderLogo(modelId),
+      releaseDate: "",
+      context: "",
+      output: "",
+      features: [],
+      modelMetaZh: "",
+      modelMetaEn: "",
+    };
+  }
+
+  const inputs = model.modalities?.input || [];
+  const outputs = model.modalities?.output || [];
+  const features: string[] = [];
+  if (outputs.includes("image")) features.push("imageGeneration");
+  if (inputs.includes("image")) features.push("imageUnderstanding");
+  if (inputs.includes("audio") || outputs.includes("audio")) features.push("audio");
+  if (inputs.includes("video") || outputs.includes("video")) features.push("video");
+  if (inputs.includes("pdf") || outputs.includes("pdf")) features.push("pdf");
+  if (model.reasoning) features.push("reasoning");
+  if (model.interleaved) features.push("interleaved");
+  if (model.tool_call) features.push("toolCall");
+  if (model.structured_output) features.push("structuredOutput");
+  if (model.attachment) features.push("attachment");
+  if (model.temperature) features.push("temperature");
+
+  const releaseDate = formatReleaseDate(model.release_date) || "";
+  const context = formatTokenCount(model.limit?.context) || "";
+  const output = formatTokenCount(model.limit?.output) || "";
+  const buildMeta = (
+    labels: Record<string, string>,
+    releaseLabel: string,
+    contextLabel: string,
+    outputLabel: string,
+  ) => [
+    releaseDate ? `${releaseLabel}: ${releaseDate}` : null,
+    ...features.map((f) => labels[f]).filter(Boolean),
+    context ? `${contextLabel}: ${context}` : null,
+    output ? `${outputLabel}: ${output}` : null,
+  ].filter(Boolean).join(" / ");
+
+  return {
+    logo: getCatalogProviderLogo(modelId),
+    releaseDate,
+    context,
+    output,
+    features,
+    modelMetaZh: buildMeta(zhFeatureLabels, "发布", "上下文", "输出"),
+    modelMetaEn: buildMeta(enFeatureLabels, "Release", "Context", "Output"),
+  };
+}
+
+function getEntryDisplayMeta(entry: ApiEntry, catalogMap: Map<string, CatalogDisplayMeta>): CatalogDisplayMeta {
+  const catalogModel = entry.upstream_model || entry.model;
+  const fallback = catalogMap.get(catalogModel) || buildCatalogDisplayMeta(catalogModel);
+  return {
+    logo: entry.provider_logo || fallback.logo || `${import.meta.env.BASE_URL}logo/custom.svg`,
+    releaseDate: entry.release_date || fallback.releaseDate || "",
+    context: fallback.context,
+    output: fallback.output,
+    features: fallback.features,
+    modelMetaZh: entry.model_meta_zh || fallback.modelMetaZh || "",
+    modelMetaEn: entry.model_meta_en || fallback.modelMetaEn || "",
+  };
+}
+
+function ModelMetaBlock({ metaZh, metaEn, releaseDate, context, output, features }: {
+  metaZh?: string;
+  metaEn?: string;
+  releaseDate?: string;
+  context?: string;
+  output?: string;
+  features: string[];
+}) {
+  const { t, i18n } = useTranslation();
+  const storedMeta = i18n.language?.startsWith("zh") ? metaZh : metaEn;
+  if (storedMeta) return <div className="mt-1 text-xs text-muted-foreground truncate">{storedMeta}</div>;
+  if (!releaseDate && features.length === 0 && !context && !output) return null;
+  const segments = [
+    releaseDate ? `${t("apiPool.modelMeta.releaseDate")}: ${releaseDate}` : null,
+    ...features,
+    context ? `${t("apiPool.modelMeta.context")}: ${context}` : null,
+    output ? `${t("apiPool.modelMeta.output")}: ${output}` : null,
+  ].filter(Boolean) as string[];
+  if (segments.length === 0) return null;
+  return <div className="mt-1 text-xs text-muted-foreground truncate">{segments.join(" / ")}</div>;
+}
+
+function getEntryStatus(entry: ApiEntry) {
+  const now = Math.floor(Date.now() / 1000);
+  if (entry.cooldown_until && entry.cooldown_until > now) return "open";
+  if (!entry.enabled) return "disabled";
+  return "closed";
+}
+
+function formatCooldownRemaining(cooldownUntil: number | null | undefined) {
+  if (!cooldownUntil) return null;
+  const remaining = Math.max(0, cooldownUntil - Math.floor(Date.now() / 1000));
+  if (remaining <= 0) return null;
+  return `${Math.ceil(remaining / 60)}m`;
+}
+
+function GroupSelector({
+  value,
+  groups,
+  onChange,
+}: {
+  value: string;
+  groups: string[];
+  onChange: (group: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState("");
+
+  const options = useMemo(() => {
+    const merged = new Set(["auto", ...groups, value || "auto"]);
+    return Array.from(merged).filter(Boolean).sort((a, b) => a.localeCompare(b));
+  }, [groups, value]);
+
+  const filtered = draft.trim()
+    ? options.filter((item) => item.toLowerCase().includes(draft.trim().toLowerCase()))
+    : options;
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="flex items-center justify-center rounded p-1 text-muted-foreground hover:bg-muted"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <Tag className="h-4 w-4" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-48 p-2" align="start" onClick={(event) => event.stopPropagation()}>
+        <Input
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          placeholder={t("apiPool.group.searchPlaceholder")}
+          className="mb-2 h-8 text-xs"
+        />
+        <div className="max-h-40 overflow-y-auto space-y-1">
+          {filtered.map((group) => (
+            <button
+              key={group}
+              type="button"
+              className={cn(
+                "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent",
+                group === value && "bg-accent"
+              )}
+              onClick={() => {
+                onChange(group);
+                setDraft("");
+                setOpen(false);
+              }}
+            >
+              <Check className={cn("h-3 w-3", group === value ? "opacity-100" : "opacity-0")} />
+              <span className="truncate">{group}</span>
+            </button>
+          ))}
+          {filtered.length === 0 && draft.trim() ? (
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
+              onClick={() => {
+                onChange(draft.trim());
+                setDraft("");
+                setOpen(false);
+              }}
+            >
+              <Check className="h-3 w-3 opacity-0" />
+              <span className="truncate">{t("apiPool.group.create", { name: draft.trim() })}</span>
+            </button>
+          ) : (
+            <Link2Off className="h-3.5 w-3.5 shrink-0 text-amber-500" title={t("apiPool.mapping.unmappedHint")} />
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function CardBody({
+  entry,
+  onTest,
+  onDelete,
+  onToggleIntent,
+  onEditMapping,
+  onGroupChange,
+  groups,
+  testingEntryIds,
+  testResult,
+  testErrorDetail,
+  catalogLogo,
+  catalogReleaseDate,
+  catalogContext,
+  catalogOutput,
+  catalogFeatures,
+  modelMetaZh,
+  modelMetaEn,
+}: {
+  entry: ApiEntry;
+  onTest: (entry: ApiEntry) => void;
+  onDelete: (entry: ApiEntry, options?: { shiftKey?: boolean }) => void;
+  onToggleIntent: (entry: ApiEntry, enabled: boolean, options: { ctrlKey: boolean; shiftKey: boolean; metaKey: boolean }) => void;
+  onEditMapping?: (entry: ApiEntry) => void;
+  onGroupChange?: (entry: ApiEntry, group: string) => void;
+  groups?: string[];
+  testingEntryIds?: Set<string>;
+  testResult?: string;
+  testErrorDetail?: string;
+  catalogLogo: string;
+  catalogReleaseDate?: string;
+  catalogContext?: string;
+  catalogOutput?: string;
+  catalogFeatures: string[];
+  modelMetaZh?: string;
+  modelMetaEn?: string;
+}) {
+  const { t } = useTranslation();
+  const cooldownRemaining = formatCooldownRemaining(entry.cooldown_until);
+  const downstreamModel = getEffectiveDownstreamModel(entry);
+  const upstreamModel = entry.upstream_model?.trim() || downstreamModel;
+  const hasMapping = upstreamModel !== downstreamModel;
+  return (
+    <div
+      className="flex flex-1 items-center gap-3 min-w-0"
+      onContextMenu={(e) => {
+        if (!onEditMapping) return;
+        e.preventDefault();
+        onEditMapping(entry);
+      }}
+    >
+      <div className="h-10 w-10 rounded-md bg-muted/40 border flex items-center justify-center shrink-0 mt-0.5">
+        <img src={catalogLogo} alt="provider" className="h-6 w-6 shrink-0" loading="lazy" onError={(e) => {
+          e.currentTarget.onerror = null;
+          e.currentTarget.src = `${import.meta.env.BASE_URL}logo/custom.svg`;
+        }} />
+      </div>
+      <div className="flex-1 min-w-0 overflow-hidden">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="font-medium truncate">{downstreamModel}</span>
+          {hasMapping ? (
+            <>
+              <span className="text-xs text-muted-foreground shrink-0">&lt;=&gt;</span>
+              <span className="text-sm text-muted-foreground truncate">{upstreamModel}</span>
+            </>
+          ) : (
+            <Link2Off className="h-3.5 w-3.5 shrink-0 text-amber-500" title={t("apiPool.mapping.unmappedHint")} />
+          )}
+          <StatusDot state={getEntryStatus(entry)} />
+          <span className="font-medium truncate">{entry.channel_name || "—"}</span>
+          {testingEntryIds?.has(entry.id) ? <RefreshCw className="h-3 w-3 animate-spin text-muted-foreground shrink-0" />
+            : testResult === "X" ? <XCircle className="h-3 w-3 text-red-500 shrink-0" />
+            : testResult ? <span className="text-xs text-green-600 shrink-0">({formatResponseMs(testResult)})</span>
+            : entry.response_ms === "X" ? <XCircle className="h-3 w-3 text-red-500 shrink-0" />
+            : entry.response_ms ? <span className="text-xs text-green-600 shrink-0">({formatResponseMs(entry.response_ms)})</span>
+            : null}
+          {cooldownRemaining ? <span className="text-xs text-red-500 shrink-0">{t("apiPool.cooldownInline", { time: cooldownRemaining })}</span> : null}
+          {testErrorDetail ? <span className="text-xs text-yellow-600 shrink-0" title={testErrorDetail}>⚠</span> : null}
+        </div>
+          <div className="mt-1 flex items-center gap-2 min-w-0">
+            <ModelMetaBlock
+              metaZh={modelMetaZh}
+              metaEn={modelMetaEn}
+              releaseDate={catalogReleaseDate}
+              context={catalogContext}
+              output={catalogOutput}
+              features={catalogFeatures.map((f) => t(`apiPool.modelMeta.features.${f}`))}
+            />
+          </div>
+      </div>
+<div className="flex items-center gap-2">
+          <div className="flex items-center gap-0.5">
+            {groups && onGroupChange ? (
+              <GroupSelector value={entry.group_name || "auto"} groups={groups} onChange={(group) => onGroupChange(entry, group)} />
+            ) : null}
+            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground touch-none" onClick={() => onTest(entry)}>
+              <MessageSquare className="h-4 w-4" />
+            </Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-red-500 touch-none" onClick={(e) => { e.stopPropagation(); onDelete(entry, { shiftKey: e.shiftKey }); }}>
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </div>
+          <Switch checked={entry.enabled} onClick={(e) => {
+            e.stopPropagation();
+            onToggleIntent(entry, !entry.enabled, { ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, metaKey: e.metaKey });
+          }} onCheckedChange={() => {}} className="touch-none" />
+        </div>
+    </div>
+  );
+}
+
+function SortablePoolEntryCard(props: {
+  entry: ApiEntry;
+  onTest: (entry: ApiEntry) => void;
+  onDelete: (entry: ApiEntry, options?: { shiftKey?: boolean }) => void;
+  onToggleIntent: (entry: ApiEntry, enabled: boolean, options: { ctrlKey: boolean; shiftKey: boolean; metaKey: boolean }) => void;
+  onEditMapping?: (entry: ApiEntry) => void;
+  onGroupChange?: (entry: ApiEntry, group: string) => void;
+  groups?: string[];
+  testingEntryIds?: Set<string>;
+  testResult?: string;
+  testErrorDetail?: string;
+  catalogLogo: string;
+  catalogReleaseDate?: string;
+  catalogContext?: string;
+  catalogOutput?: string;
+  catalogFeatures: string[];
+  modelMetaZh?: string;
+  modelMetaEn?: string;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: props.entry.id });
+  const style = { transform: CSS.Transform.toString(transform), transition, zIndex: isDragging ? 10 : undefined, opacity: isDragging ? 0.8 : undefined };
+  return (
+    <Card ref={setNodeRef} style={style} className={cn("transition-opacity", !props.entry.enabled && "opacity-60")}>
+      <CardContent className="flex items-center gap-3 p-4">
+        <div {...attributes} {...listeners} className="cursor-pointer text-muted-foreground hover:text-foreground">
+          <GripVertical className="h-3.5 w-3.5 shrink-0" />
+        </div>
+        <CardBody {...props} />
+      </CardContent>
+    </Card>
+  );
+}
+
+function PoolEntryCard(props: {
+  entry: ApiEntry;
+  onTest: (entry: ApiEntry) => void;
+  onDelete: (entry: ApiEntry, options?: { shiftKey?: boolean }) => void;
+  onToggleIntent: (entry: ApiEntry, enabled: boolean, options: { ctrlKey: boolean; shiftKey: boolean; metaKey: boolean }) => void;
+  onEditMapping?: (entry: ApiEntry) => void;
+  onGroupChange?: (entry: ApiEntry, group: string) => void;
+  groups?: string[];
+  testingEntryIds?: Set<string>;
+  testResult?: string;
+  testErrorDetail?: string;
+  catalogLogo: string;
+  catalogReleaseDate?: string;
+  catalogContext?: string;
+  catalogOutput?: string;
+  catalogFeatures: string[];
+  modelMetaZh?: string;
+  modelMetaEn?: string;
+}) {
+  return (
+    <Card className={cn("transition-opacity", !props.entry.enabled && "opacity-60")}>
+      <CardContent className="flex items-center gap-3 p-4">
+        <CardBody {...props} />
+      </CardContent>
+    </Card>
+  );
+}
+
+function AddApiDialog({ open, onOpenChange, channels, channelsLoading, adapter }: {
+open: boolean;
+onOpenChange: (value: boolean) => void;
+channels: Channel[]; 
+channelsLoading: boolean;
+adapter: ReturnType<typeof useApiAdapter>;
+}) {
+const { t } = useTranslation();
+const queryClient = useQueryClient();
+const [channelId, setChannelId] = useState("");
+const [modelName, setModelName] = useState("");
+const [upstreamModel, setUpstreamModel] = useState("");
+const [displayName, setDisplayName] = useState("");
+const channelOptions = channels.filter((c) => c.enabled);
+
+  const createMutation = useMutation({
+    mutationFn: () => adapter.pool.create({
+      channelId,
+      model: modelName,
+      upstreamModel: upstreamModel || undefined,
+      displayName: displayName || undefined,
+      groupName: "auto",
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["entries"] });
+      onOpenChange(false);
+      setChannelId("");
+      setModelName("");
+      setUpstreamModel("");
+      setDisplayName("");
+    },
+    onError: (err) => toast.error(`${t("apiPool.addApi")} ${t("common.failed")}: ${err}`),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={(value) => {
+      if (!value) {
+        setChannelId("");
+        setModelName("");
+        setUpstreamModel("");
+        setDisplayName("");
+      }
+      onOpenChange(value);
+    }}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>{t("apiPool.addModel")}</DialogTitle></DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <div className="text-sm font-medium">{t("apiPool.channel")}</div>
+            <Select value={channelId} onValueChange={(value) => {
+              setChannelId(value);
+              setModelName("");
+              setUpstreamModel("");
+              setDisplayName("");
+            }}>
+<SelectTrigger><SelectValue placeholder={t("apiPool.selectChannel")} /></SelectTrigger>
+<SelectContent>
+{channelsLoading ? (
+<SelectItem value="loading" disabled>{t("common.loading")}</SelectItem>
+) : channelOptions.length === 0 ? (
+<SelectItem value="empty" disabled>{t("apiPool.noEnabledChannels")}</SelectItem>
+) : (
+channelOptions.map((channel) => <SelectItem key={channel.id} value={channel.id}>{channel.name}</SelectItem>)
+)}
+</SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <div className="text-sm font-medium">{t("apiPool.model")}</div>
+            <Input value={modelName} onChange={(e) => setModelName(e.target.value)} placeholder={t("apiPool.modelPlaceholder")} />
+          </div>
+          <div className="space-y-2">
+            <div className="text-sm font-medium">{t("apiPool.upstreamModel")}</div>
+            <Input value={upstreamModel} onChange={(e) => setUpstreamModel(e.target.value)} placeholder={t("apiPool.upstreamModelPlaceholder")} />
+          </div>
+          <div className="space-y-2">
+            <div className="text-sm font-medium">{t("apiPool.displayName")}</div>
+            <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder={t("apiPool.displayNamePlaceholder")} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("common.cancel")}</Button>
+          <Button onClick={() => createMutation.mutate()} disabled={!channelId || !modelName || createMutation.isPending}>{t("common.add")}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function MappingDialogLegacy({ entry, open, onOpenChange, adapter }: {
+  entry: ApiEntry | null;
+  open: boolean;
+  onOpenChange: (value: boolean) => void;
+  adapter: ReturnType<typeof useApiAdapter>;
+}) {
+  return null;
+}
+
+function MappingDialog({ entry, open, onOpenChange, adapter }: {
+  entry: ApiEntry | null;
+  open: boolean;
+  onOpenChange: (value: boolean) => void;
+  adapter: ReturnType<typeof useApiAdapter>;
+}) {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const [downstreamModel, setDownstreamModel] = useState("");
+
+  useEffect(() => {
+    if (open) setDownstreamModel(entry?.model || entry?.upstream_model || "");
+  }, [open, entry]);
+
+  const updateMutation = useMutation({
+    mutationFn: () => {
+      if (!entry) throw new Error("No entry selected");
+      return adapter.pool.updateModel(entry.id, downstreamModel.trim());
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["entries"] });
+      onOpenChange(false);
+    },
+    onError: (err) => toast.error(`${t("apiPool.mapping.updateFailed")}: ${err}`),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t("apiPool.mapping.title")}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <div className="text-sm font-medium">{t("apiPool.mapping.downstreamModel")}</div>
+            <Input value={downstreamModel} onChange={(e) => setDownstreamModel(e.target.value)} />
+          </div>
+          <div className="space-y-2">
+            <div className="text-sm font-medium">{t("apiPool.mapping.upstreamModel")}</div>
+            <Input value={entry?.upstream_model || entry?.model || ""} disabled />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("common.cancel")}</Button>
+          <Button onClick={() => updateMutation.mutate()} disabled={!entry || updateMutation.isPending}>{t("common.save")}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function PoolManager() {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const adapter = useApiAdapter();
+  const [localOrder, setLocalOrder] = useState<string[] | null>(null);
+  const [filterText, setFilterText] = useState("");
+  const [debouncedFilter, setDebouncedFilter] = useState("");
+  const [filterChannel, setFilterChannel] = useState<string>("all");
+  const [showAdd, setShowAdd] = useState(false);
+  const [testEntry, setTestEntry] = useState<ApiEntry | null>(null);
+  const [testingEntryIds, setTestingEntryIds] = useState<Set<string>>(new Set());
+  const [testResults, setTestResults] = useState<Record<string, string>>({});
+  const [testErrorDetails, setTestErrorDetails] = useState<Record<string, string>>({});
+  const [testProgress, setTestProgress] = useState<{ current: number; total: number } | null>(null);
+  const [deleteDialog, setDeleteDialog] = useState<{ entry: ApiEntry; channelMode: boolean } | null>(null);
+  const [mappingDialog, setMappingDialog] = useState<ApiEntry | null>(null);
+  const [groupFilter, setGroupFilter] = useState<string>("auto");
+  const [modelPrefixFilter, setModelPrefixFilter] = useState<string>("all");
+
+  const entriesQueryKey = useMemo(
+    () => ["entries", "paginated", groupFilter, filterChannel, debouncedFilter] as const,
+    [groupFilter, filterChannel, debouncedFilter],
+  );
+
+  // 搜索输入 300ms 防抖，避免每次按键都触发后端请求
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedFilter(filterText), 300);
+    return () => clearTimeout(timer);
+  }, [filterText]);
+
+  // 无限滚动分页加载 entries
+  const {
+    data: entriesPages,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isLoading,
+  } = useInfiniteQuery({
+    queryKey: entriesQueryKey,
+    queryFn: ({ pageParam = 1 }) =>
+      adapter.pool.listPaginated({
+        page: pageParam,
+        pageSize: 20,
+        groupName: groupFilter !== "all" ? groupFilter : undefined,
+        channelId: filterChannel !== "all" ? filterChannel : undefined,
+        search: debouncedFilter.trim() || undefined,
+      }) as Promise<PaginatedResult<ApiEntry>>,
+    getNextPageParam: (lastPage) =>
+      lastPage.page * lastPage.page_size < lastPage.total ? lastPage.page + 1 : undefined,
+    initialPageParam: 1,
+    staleTime: 0,
+  });
+
+  const { data: channels, isLoading: channelsLoading } = useQuery({ queryKey: ["channels", "all"], queryFn: () => adapter.channels.list() as Promise<Channel[]>, staleTime: 2000 });
+
+  // 分组列表从轻量接口单独拉取
+  const { data: groupList } = useQuery({
+    queryKey: ["groups"],
+    queryFn: () => adapter.pool.getGroups() as Promise<string[]>,
+    staleTime: 2000,
+  });
+  const groups = useMemo(() => {
+    const vals = groupList ?? [];
+    return [...new Set(["auto", ...vals])].filter(Boolean).sort((a, b) => {
+      if (a === "auto") return -1;
+      if (b === "auto") return 1;
+      return a.localeCompare(b);
+    });
+  }, [groupList]);
+
+  // 所有已加载的 entries 拍平
+  const entries = useMemo(() => entriesPages?.pages.flatMap((p) => p.items) ?? [], [entriesPages]);
+
+  // 无限滚动：IntersectionObserver 触发加载更多
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !hasNextPage || isFetchingNextPage) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) fetchNextPage(); },
+      { rootMargin: "200px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+
+  // 过滤条件变化时清除本地排序
+  useEffect(() => {
+    setLocalOrder(null);
+  }, [groupFilter, debouncedFilter, filterChannel, modelPrefixFilter]);
+
+   // Desktop-only: Real-time tray reprioritisation via Tauri event.
+   // This hook is a no-op on web builds (useTauriEvent returns false).
+   // Event: "tray-priority-changed" — triggered when user reorders entries via system tray.
+   useTauriEvent("tray-priority-changed", () => {
+     queryClient.invalidateQueries({ queryKey: entriesQueryKey });
+     queryClient.invalidateQueries({ queryKey: ["settings"] });
+   });
+
+   // Event-driven refresh: invalidate entries when the backend signals a change.
+   // 300ms 防抖：避免 Tauri 事件风暴导致连续重渲染
+   const lastEntriesEvent = useRef(0);
+   useEvent("entries-changed", () => {
+     const now = Date.now();
+     if (now - lastEntriesEvent.current < 300) return;
+     lastEntriesEvent.current = now;
+     queryClient.invalidateQueries({ queryKey: entriesQueryKey });
+   });
+
+   useEvent("channels-changed", () => {
+     queryClient.invalidateQueries({ queryKey: ["channels", "all"] });
+   });
+
+  const catalogMap = useMemo(() => {
+    const map = new Map<string, CatalogDisplayMeta>();
+    for (const entry of entries || []) {
+      if (!map.has(entry.model)) {
+        const exact = getCatalogModelExact(entry.model);
+        if (exact) map.set(entry.model, buildCatalogDisplayMeta(entry.model));
+      }
+    }
+    return map;
+  }, [entries]);
+
+   const sorted = useMemo(() => {
+     const list = [...(entries || [])];
+     const enabled = list.filter((e) => e.enabled).sort((a, b) => a.sort_index - b.sort_index);
+     const disabled = list.filter((e) => !e.enabled).sort((a, b) => a.sort_index - b.sort_index);
+     return [...enabled, ...disabled];
+   }, [entries]);
+
+   const displayEntries = useMemo(() => {
+      if (!localOrder) return sorted;
+      const ordered = localOrder.map((id) => sorted.find((e) => e.id === id)).filter(Boolean) as ApiEntry[];
+      const missing = sorted.filter((entry) => !localOrder.includes(entry.id));
+      return [...ordered, ...missing];
+    }, [localOrder, sorted]);
+
+  // 过滤条件已进入 queryKey 并由后端分页接口处理，这里只消费当前页结果
+  const modelPrefixTabs = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const entry of displayEntries) {
+      const prefix = getEffectiveDownstreamModel(entry).slice(0, 7);
+      if (!prefix) continue;
+      counts.set(prefix, (counts.get(prefix) || 0) + 1);
+    }
+    return [
+      { key: "all", label: t("common.all"), count: displayEntries.length },
+      ...Array.from(counts.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, count]) => ({ key, label: key, count })),
+    ];
+  }, [displayEntries, t]);
+
+  const filteredEntries = useMemo(() => {
+    if (modelPrefixFilter === "all") return displayEntries;
+    return displayEntries.filter((entry) => getEffectiveDownstreamModel(entry).startsWith(modelPrefixFilter));
+  }, [displayEntries, modelPrefixFilter]);
+
+  const activeModelTabEntries = useMemo(() => {
+    if (modelPrefixFilter === "all") return displayEntries;
+    return displayEntries.filter((entry) => getEffectiveDownstreamModel(entry).startsWith(modelPrefixFilter));
+  }, [displayEntries, modelPrefixFilter]);
+  // 全局排序不依赖于分组/渠道筛选；仅在搜索时不可用
+  const canReorder = true; // 允许在搜索过滤状态下拖动排序模型条目
+
+  const reorderMutation = useMutation({
+    mutationFn: (orderedIds: string[]) => adapter.pool.reorder(orderedIds),
+    onSuccess: () => {
+      const scrollY = window.scrollY;
+      queryClient.invalidateQueries({ queryKey: entriesQueryKey });
+      setLocalOrder(null);
+      requestAnimationFrame(() => window.scrollTo(0, scrollY));
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => adapter.pool.delete(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: entriesQueryKey });
+      setDeleteDialog(null);
+    },
+  });
+
+  const deleteChannelMutation = useMutation({
+    mutationFn: (id: string) => adapter.channels.delete(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: entriesQueryKey });
+      queryClient.invalidateQueries({ queryKey: ["channels"] });
+      setDeleteDialog(null);
+    },
+    onError: (err, id) => {
+      toast.error(`删除渠道失败: ${err instanceof Error ? err.message : String(err)}`, { id: `delete-channel-${id}` });
+    },
+  });
+
+  const updateGroupMutation = useMutation({
+    mutationFn: ({ id, groupName }: { id: string; groupName: string }) => adapter.pool.updateGroup(id, groupName),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: entriesQueryKey });
+    },
+    onError: (err) => {
+      toast.error(`${t("apiPool.group.updateFailed")}: ${err}`);
+    },
+  });
+
+  const handleGroupChange = useCallback((entry: ApiEntry, group: string) => {
+    updateGroupMutation.mutate({ id: entry.id, groupName: group.trim() || "auto" });
+  }, [updateGroupMutation]);
+
+  const handleMappingEdit = useCallback((entry: ApiEntry) => {
+    setMappingDialog(entry);
+  }, []);
+
+const handleToggleIntent = useCallback(async (entry: ApiEntry, enabled: boolean, options: { ctrlKey: boolean; shiftKey: boolean; metaKey: boolean }) => {
+      const hotKey = options.ctrlKey || options.metaKey;
+      if (options.shiftKey) {
+        const targetEntries = filteredEntries;
+        const targetIds = targetEntries.map((e) => e.id);
+        // Use batch IPC to avoid N concurrent invoke calls in Tauri
+        await adapter.pool.batchToggle(targetIds, enabled);
+        requestAnimationFrame(() => queryClient.invalidateQueries({ queryKey: entriesQueryKey }));
+        return;
+      }
+
+      await adapter.pool.toggle(entry.id, enabled);
+      if (enabled && hotKey) {
+       // Move enabled entry to top of order when using hotkey (Ctrl/Cmd)
+       const currentOrder = localOrder ? [...localOrder] : displayEntries.map((e) => e.id);
+       const newOrder = [entry.id, ...currentOrder.filter((id) => id !== entry.id)];
+       setLocalOrder(newOrder);
+       reorderMutation.mutate(newOrder);
+     } else {
+       requestAnimationFrame(() => queryClient.invalidateQueries({ queryKey: entriesQueryKey }));
+     }
+    }, [adapter.pool, displayEntries, entriesQueryKey, filteredEntries, localOrder, queryClient, reorderMutation]);
+
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
+
+
+
+   const handleDragEnd = (event: DragEndEvent) => {
+     if (!canReorder) return;
+     const { active, over } = event;
+     if (!over || active.id === over.id) return;
+     const oldIndex = filteredEntries.findIndex((e) => e.id === active.id);
+     const newIndex = filteredEntries.findIndex((e) => e.id === over.id);
+     if (oldIndex === -1 || newIndex === -1) return;
+     const newOrder = arrayMove(filteredEntries, oldIndex, newIndex);
+     const newIds = newOrder.map((e) => e.id);
+     const remainingIds = displayEntries.filter((entry) => !newIds.includes(entry.id)).map((entry) => entry.id);
+     const mergedOrder = [...newIds, ...remainingIds];
+     setLocalOrder(mergedOrder);
+     reorderMutation.mutate(mergedOrder);
+   };
+
+  const testAllEntries = useCallback(async () => {
+    if (!activeModelTabEntries.length || testProgress) return;
+    const scopedEntries = activeModelTabEntries;
+    const results: Record<string, string> = {};
+    const errorDetails: Record<string, string> = {};
+    let completed = 0;
+    const total = scopedEntries.length;
+    setTestProgress({ current: 0, total });
+    const grouped = new Map<string, ApiEntry[]>();
+    for (const entry of scopedEntries) {
+      const list = grouped.get(entry.channel_id) || [];
+      list.push(entry);
+      grouped.set(entry.channel_id, list);
+    }
+    const testChannel = async (channelEntries: ApiEntry[]) => {
+      for (const entry of channelEntries) {
+        setTestingEntryIds((prev) => {
+          const next = new Set(prev);
+          for (const e of channelEntries) next.delete(e.id);
+          next.add(entry.id);
+          return next;
+        });
+        try {
+          const result = await adapter.pool.testLatency(entry.id);
+          if (result.latency_ms !== null) {
+            results[entry.id] = result.latency_ms.toString();
+          } else {
+            results[entry.id] = "X";
+            // 保存错误详情供前端展示
+            if (result.error_detail) {
+              errorDetails[entry.id] = result.error_detail;
+            }
+            await adapter.pool.toggle(entry.id, false);
+          }
+        } catch (err) {
+          results[entry.id] = "X";
+          const errMsg = err instanceof Error ? err.message : String(err);
+          errorDetails[entry.id] = `exception: ${errMsg}`;
+        }
+        completed++;
+        setTestProgress({ current: completed, total });
+        setTestResults({ ...results });
+        setTestErrorDetails({ ...errorDetails });
+      }
+    };
+    await Promise.all([...grouped.values()].map(testChannel));
+    setTestingEntryIds(new Set());
+    setTestResults({});
+    setTestErrorDetails({});
+    setTestProgress(null);
+    await queryClient.invalidateQueries({ queryKey: entriesQueryKey });
+  }, [activeModelTabEntries, adapter.pool, entriesQueryKey, queryClient, testProgress]);
+
+
+  return (
+    <div className="p-6">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-xl font-semibold">{t("apiPool.title")}</h1>
+          <p className="text-sm text-muted-foreground mt-1">{t("apiPool.description")}</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <Button size="sm" variant="outline" className="gap-1.5 min-w-[140px]" onClick={testAllEntries} disabled={!!testProgress}>
+            <RefreshCw className={cn("h-4 w-4", testProgress && "animate-spin")} />
+            {testProgress ? `${testProgress.current}/${testProgress.total}` : t("apiPool.testAllLatency")}
+          </Button>
+          <Button size="sm" className="gap-1.5" onClick={() => setShowAdd(true)}>
+            <Plus className="h-4 w-4" />
+            {t("apiPool.addModel")}
+          </Button>
+        </div>
+      </div>
+      <div className="sticky top-0 z-10 bg-background pt-1 pb-1">
+        <div className="relative">
+          <Input className="flex-1 pr-8" placeholder={t("apiPool.search")} value={filterText} onChange={(e) => setFilterText(e.target.value)} />
+          {filterText ? <button type="button" className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" onClick={() => setFilterText("")}><X className="h-4 w-4" /></button> : null}
+        </div>
+      </div>
+      <div className="mt-2 -mx-px w-[calc(100%+2px)] rounded-t-md border border-b-0 bg-background">
+        <div className="flex w-full items-center px-0 py-0 overflow-x-auto">
+          {modelPrefixTabs.map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              className={`h-6 shrink-0 px-3 text-xs border-b-2 transition-colors ${modelPrefixFilter === tab.key ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+              onClick={() => setModelPrefixFilter(tab.key)}
+            >
+              {tab.label}
+              <span className="ml-1 opacity-70">({tab.count})</span>
+            </button>
+          ))}
+        </div>
+      </div>
+      {groups.length > 0 ? (
+        <div className="mt-2 -mx-px w-[calc(100%+2px)] rounded-t-md border border-b-0 bg-background">
+          <div className="flex w-full items-center px-0 py-0">
+            {groups.map((group, index) => (
+              <button
+                key={group}
+                type="button"
+                className={`h-6 flex-1 px-3 text-xs border-b-2 transition-colors ${groupFilter === group ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                onClick={() => {
+                  setGroupFilter(group);
+                }}
+              >
+                {group}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      <Card className="rounded-t-none">
+        <CardContent className="p-4 pt-4">
+          {isLoading ? (
+            <div className="space-y-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-3 p-4 border rounded-md">
+                  <div className="h-10 w-10 shrink-0 animate-pulse bg-muted rounded" />
+                  <div className="flex-1 space-y-2">
+                    <div className="h-4 w-1/3 animate-pulse bg-muted rounded" />
+                    <div className="h-3 w-1/2 animate-pulse bg-muted rounded" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            (!entries?.length ? (
+              <div className="flex h-48 items-center justify-center text-muted-foreground">{t("apiPool.empty")}</div>
+            ) : canReorder ? (
+              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                <SortableContext items={filteredEntries.map((e) => e.id)} strategy={verticalListSortingStrategy}>
+                  <div className="flex flex-col gap-3">
+                    {filteredEntries.map((entry) => {
+                      const meta = getEntryDisplayMeta(entry, catalogMap);
+                      return <SortablePoolEntryCard key={entry.id} entry={entry} onTest={setTestEntry} onDelete={(entry, opts) => { setDeleteDialog({ entry, channelMode: !!opts?.shiftKey }); }} onToggleIntent={handleToggleIntent} onEditMapping={handleMappingEdit} onGroupChange={handleGroupChange} groups={groups} testingEntryIds={testingEntryIds} testResult={testResults[entry.id]} testErrorDetail={testErrorDetails[entry.id]} catalogLogo={meta.logo} catalogReleaseDate={meta.releaseDate} catalogContext={meta.context} catalogOutput={meta.output} catalogFeatures={meta.features} modelMetaZh={meta.modelMetaZh} modelMetaEn={meta.modelMetaEn} />;
+                    })}
+                    {/* 无限滚动 sentinel */}
+                    <div ref={sentinelRef} className="h-4" />
+                    {isFetchingNextPage && (
+                      <div className="flex justify-center py-4 text-sm text-muted-foreground">
+                        Loading...
+                      </div>
+                    )}
+                  </div>
+                </SortableContext>
+              </DndContext>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {filteredEntries.map((entry) => {
+                  const meta = getEntryDisplayMeta(entry, catalogMap);
+                  return <PoolEntryCard key={entry.id} entry={entry} onTest={setTestEntry} onDelete={(entry, opts) => { setDeleteDialog({ entry, channelMode: !!opts?.shiftKey }); }} onToggleIntent={handleToggleIntent} onEditMapping={handleMappingEdit} onGroupChange={handleGroupChange} groups={groups} testingEntryIds={testingEntryIds} testResult={testResults[entry.id]} testErrorDetail={testErrorDetails[entry.id]} catalogLogo={meta.logo} catalogReleaseDate={meta.releaseDate} catalogContext={meta.context} catalogOutput={meta.output} catalogFeatures={meta.features} modelMetaZh={meta.modelMetaZh} modelMetaEn={meta.modelMetaEn} />;
+                })}
+                <div ref={sentinelRef} className="h-4" />
+                {isFetchingNextPage && (
+                  <div className="flex justify-center py-4 text-sm text-muted-foreground">
+                    Loading...
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+        </CardContent>
+      </Card>
+      <AddApiDialog open={showAdd} onOpenChange={setShowAdd} channels={channels || []} channelsLoading={channelsLoading} adapter={adapter} />
+      <MappingDialog open={!!mappingDialog} entry={mappingDialog} onOpenChange={(value) => !value && setMappingDialog(null)} adapter={adapter} />
+      <TestChatDialog open={!!testEntry} onOpenChange={(v) => !v && setTestEntry(null)} entry={testEntry} />
+      <Dialog open={!!deleteDialog} onOpenChange={(v) => { if (!v) setDeleteDialog(null); }}>
+        <DialogContent>
+          {deleteDialog?.channelMode ? (
+            <>
+              <DialogHeader><DialogTitle>删除渠道</DialogTitle></DialogHeader>
+              <p className="text-sm text-muted-foreground">确定要删除渠道「{deleteDialog.entry.channel_name || deleteDialog.entry.channel_id}」及其下所有模型吗？此操作不可撤销。</p>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setDeleteDialog(null)}>{t("common.cancel")}</Button>
+                <Button variant="destructive" disabled={deleteChannelMutation.isPending} onClick={() => { if (deleteDialog) deleteChannelMutation.mutate(deleteDialog.entry.channel_id); }}>删除渠道</Button>
+              </DialogFooter>
+            </>
+          ) : (
+            <>
+              <DialogHeader><DialogTitle>{t("common.deleteTitle")}</DialogTitle></DialogHeader>
+              <p className="text-sm text-muted-foreground">{t("common.deleteWarning")}</p>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setDeleteDialog(null)}>{t("common.cancel")}</Button>
+                <Button variant="destructive" disabled={deleteMutation.isPending} onClick={() => { if (deleteDialog) deleteMutation.mutate(deleteDialog.entry.id); }}>{t("common.delete")}</Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

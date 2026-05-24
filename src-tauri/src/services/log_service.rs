@@ -1,0 +1,175 @@
+use crate::database::{
+    ApiEntry, Channel, ChartDataPoint, DashboardStats, Database, ModelRanking, PaginatedResult,
+    UsageLog, UsageLogFilter, UserRanking,
+};
+use crate::error::AppError;
+use serde_json::{json, Value};
+
+pub struct TestUsageLogInput<'a> {
+    pub entry: &'a ApiEntry,
+    pub channel: &'a Channel,
+    pub operation: &'a str,
+    pub log_group: &'a str,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub latency_ms: i64,
+    pub status_code: i32,
+    pub success: bool,
+    pub error_message: Option<&'a str>,
+    pub error_kind: Option<&'a str>,
+    pub response_ms: Option<&'a str>,
+    pub error_preview: Option<&'a str>,
+}
+
+
+/// 记录测试对话和测速产生的真实消耗。
+///
+/// 只记录元数据、耗时和 token 用量，不记录 API Key、用户提示词、请求体或模型回复。
+pub fn insert_test_usage_log(
+    db: &Database,
+    app_handle: Option<&tauri::AppHandle>,
+    input: TestUsageLogInput<'_>,
+) {
+    let log_type = if input.success { 2 } else { 5 };
+    let use_time = ((input.latency_ms as f64) / 1000.0).ceil() as i64;
+    let content = input.error_message.unwrap_or("");
+    let other = json!({
+        "kind": "test",
+        "operation": input.operation,
+        "entry_id": input.entry.id,
+        "channel_id": input.channel.id,
+        "api_type": input.channel.api_type,
+        "requested_model": input.entry.model,
+        "resolved_model": input.entry.upstream_model(),
+        "status_code": input.status_code,
+        "success": input.success,
+        "response_ms": input.response_ms,
+        "entry_enabled": input.entry.enabled,
+        "channel_enabled": input.channel.enabled,
+        "error_kind": input.error_kind,
+        "error_preview": input.error_preview,
+    });
+
+
+    if let Err(e) = db.insert_usage_log(
+        log_type,
+        content,
+        None,
+        "TEST",
+        "TEST",
+        &input.entry.id,
+        &input.channel.id,
+        &input.channel.name,
+        input.entry.upstream_model(),
+        &input.entry.model,
+        0,
+        false,
+        input.prompt_tokens,
+        input.completion_tokens,
+        input.latency_ms,
+        0,
+        use_time,
+        input.status_code,
+        input.success,
+        "",
+        input.log_group,
+        &other.to_string(),
+        input.error_message,
+        None,
+    ) {
+        log::warn!("写入测试消耗日志失败: {e}");
+        return;
+    }
+
+    if let Some(handle) = app_handle {
+        let _ = tauri::Emitter::emit(handle, "new-usage-log", ());
+    }
+    crate::state_version::bump();
+}
+
+pub fn extract_usage_tokens(body: &Value) -> (i64, i64) {
+    let usage = body.get("usage");
+    let prompt_tokens = usage
+        .and_then(|v| v.get("prompt_tokens"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let completion_tokens = usage
+        .and_then(|v| v.get("completion_tokens"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    (prompt_tokens, completion_tokens)
+}
+
+/// Get paginated usage logs
+pub fn get_usage_logs(
+    db: &Database,
+    filter: &UsageLogFilter,
+) -> Result<PaginatedResult<UsageLog>, AppError> {
+    db.get_usage_logs(filter)
+}
+
+/// Get dashboard statistics
+pub fn get_dashboard_stats(
+    db: &Database,
+    start_time: Option<i64>,
+    end_time: Option<i64>,
+) -> Result<DashboardStats, AppError> {
+    db.get_dashboard_stats(start_time, end_time)
+}
+
+/// Get model consumption chart data
+pub fn get_model_consumption(
+    db: &Database,
+    start_time: Option<i64>,
+    end_time: Option<i64>,
+    granularity: Option<&str>,
+) -> Result<Vec<ChartDataPoint>, AppError> {
+    db.get_model_consumption(start_time, end_time, granularity)
+}
+
+/// Get call trend chart data
+pub fn get_call_trend(
+    db: &Database,
+    start_time: Option<i64>,
+    end_time: Option<i64>,
+    granularity: Option<&str>,
+) -> Result<Vec<ChartDataPoint>, AppError> {
+    db.get_call_trend(start_time, end_time, granularity)
+}
+
+/// Get model distribution for pie chart
+pub fn get_model_distribution(
+    db: &Database,
+    start_time: Option<i64>,
+    end_time: Option<i64>,
+) -> Result<Vec<ModelRanking>, AppError> {
+    db.get_model_distribution(start_time, end_time)
+}
+
+/// Get model ranking
+pub fn get_model_ranking(
+    db: &Database,
+    start_time: Option<i64>,
+    end_time: Option<i64>,
+) -> Result<Vec<ModelRanking>, AppError> {
+    db.get_model_ranking(start_time, end_time)
+}
+
+/// Get user ranking
+pub fn get_user_ranking(
+    db: &Database,
+    start_time: Option<i64>,
+    end_time: Option<i64>,
+) -> Result<Vec<UserRanking>, AppError> {
+    db.get_user_ranking(start_time, end_time)
+}
+
+/// Get user trend chart data
+pub fn get_user_trend(
+    db: &Database,
+    start_time: Option<i64>,
+    end_time: Option<i64>,
+    granularity: Option<&str>,
+) -> Result<Vec<ChartDataPoint>, AppError> {
+    db.get_user_trend(start_time, end_time, granularity)
+}

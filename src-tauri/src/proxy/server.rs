@@ -1,0 +1,197 @@
+use super::circuit_breaker::CircuitBreaker;
+use super::handlers;
+use super::responses_handler;
+use crate::database::{AppSettings, Database};
+use axum::extract::Query;
+use axum::routing::{get, post};
+use axum::Router;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::{oneshot, RwLock};
+use tower_http::cors::{Any, CorsLayer};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProxyStatus {
+    pub running: bool,
+    pub address: String,
+    pub port: i32,
+}
+
+/// Shared proxy state
+#[derive(Clone)]
+pub struct ProxyState {
+    pub db: Arc<Database>,
+    pub settings: Arc<RwLock<AppSettings>>,
+    pub circuit_breakers: Arc<RwLock<HashMap<String, CircuitBreaker>>>,
+    pub failure_counts: Arc<RwLock<HashMap<String, u32>>>, // Entry ID -> consecutive failure count
+    pub app_handle: Option<tauri::AppHandle>,
+    pub http_client: reqwest::Client,
+    pub response_store: Arc<RwLock<HashMap<String, serde_json::Value>>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct AzureDeploymentsQuery {
+    #[serde(rename = "api-version")]
+    _api_version: Option<String>,
+}
+
+/// HTTP proxy server
+pub struct ProxyServer {
+    port: i32,
+    connect_timeout_secs: u64,
+    state: ProxyState,
+    shutdown_tx: Arc<RwLock<Option<oneshot::Sender<()>>>>,
+}
+
+impl ProxyServer {
+    pub fn new(
+        port: i32,
+        db: Arc<Database>,
+        settings: Arc<RwLock<AppSettings>>,
+        app_handle: Option<tauri::AppHandle>,
+        failure_counts: Arc<RwLock<HashMap<String, u32>>>,
+    ) -> Self {
+        let connect_timeout_secs = settings
+            .try_read()
+            .map(|settings| settings.proxy_connect_timeout_secs.clamp(1, 300))
+            .unwrap_or(30);
+        let state = ProxyState {
+            db,
+            settings,
+            circuit_breakers: Arc::new(RwLock::new(HashMap::new())),
+            failure_counts,
+            app_handle,
+            http_client: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(connect_timeout_secs))
+                .read_timeout(Duration::from_secs(120))
+                .gzip(true)
+                .build()
+                .expect("failed to build proxy HTTP client"),
+            response_store: Arc::new(RwLock::new(HashMap::new())),
+        };
+
+        Self {
+            port,
+            connect_timeout_secs,
+            state,
+            shutdown_tx: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    pub async fn start(&self) -> Result<(), String> {
+        self.start_with_admin(None).await
+    }
+
+    pub async fn start_with_admin(&self, admin_router: Option<Router>) -> Result<(), String> {
+        if self.shutdown_tx.read().await.is_some() {
+            return Err("Proxy already running".to_string());
+        }
+
+        let addr: SocketAddr = format!("0.0.0.0:{}", self.port)
+            .parse()
+            .map_err(|e| format!("Invalid address: {e}"))?;
+
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+        let cors = CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any);
+
+        let mut app = Router::new()
+            .route("/health", get(handlers::health_check))
+            .route(
+                "/v1/chat/completions",
+                post(handlers::handle_chat_completions),
+            )
+            .route("/v1/messages", post(handlers::handle_messages))
+            .route("/v1/models", get(handlers::handle_list_models))
+            .route("/anthropic/v1/models", get(handlers::handle_list_models_claude))
+            .route("/v1beta/models", get(handlers::handle_list_models_gemini))
+            .route(
+                "/openai/deployments",
+                get(
+                    |state, query: Query<AzureDeploymentsQuery>| async move {
+                        handlers::handle_list_models_azure(state, query).await
+                    },
+                ),
+            )
+            // Gemini native endpoint (generateContent + streamGenerateContent)
+            .route("/v1beta/models/*rest", post(handlers::handle_gemini_native))
+            // Gemini single model detail
+            .route("/v1beta/models/{model}", get(handlers::handle_gemini_model_detail))
+            // Azure native endpoint
+            .route(
+                "/openai/deployments/*rest",
+                post(handlers::handle_azure_chat),
+            )
+            // OpenAI Responses API (Chat Completions format under the hood)
+            .route("/v1/responses", post(responses_handler::handle_responses))
+            .route(
+                "/v1/responses/:response_id",
+                get(responses_handler::get_response).delete(responses_handler::delete_response),
+            )
+            .route(
+                "/v1/responses/:response_id/cancel",
+                post(responses_handler::cancel_response),
+            )
+            .layer(cors)
+            .with_state(self.state.clone());
+
+        if let Some(admin_router) = admin_router {
+            app = app.merge(admin_router);
+        }
+
+        let listener = tokio::net::TcpListener::bind(&addr)
+            .await
+            .map_err(|e| format!("Failed to bind: {e}"))?;
+
+        log::info!(
+            "Proxy server started on {addr}, connect_timeout={}s",
+            self.connect_timeout_secs
+        );
+
+        *self.shutdown_tx.write().await = Some(shutdown_tx);
+
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    log::error!("Proxy server error: {e}");
+                });
+
+            log::info!("Proxy server stopped");
+        });
+
+        Ok(())
+    }
+
+    pub async fn stop(&self) -> Result<(), String> {
+        if let Some(tx) = self.shutdown_tx.write().await.take() {
+            let _ = tx.send(());
+            Ok(())
+        } else {
+            Err("Proxy not running".to_string())
+        }
+    }
+
+    pub fn get_status(&self) -> ProxyStatus {
+        let running = self
+            .shutdown_tx
+            .try_read()
+            .map(|guard| guard.is_some())
+            .unwrap_or(true);
+
+        ProxyStatus {
+            running,
+            address: "127.0.0.1".to_string(),
+            port: self.port,
+        }
+    }
+}

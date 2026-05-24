@@ -1,0 +1,123 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+# Local analysis / scratch outputs
+*.local
+log_analysis*.txt
+responses_analysis.txt
+aider_leaderboard.txt
+bridge.log
+dev-output.log
+check_responses.py
+query_logs.py
+query_logs2.py
+
+# Personal planning & dev notes
+AGENTS.md
+PROTOCOL_ENVELOPE_DESIGN.md
+
+GENERIC_AGENT_FLOATING_AGENT_PLAN.md
+GENERIC_AGENT_IFRAME_PLAN.md
+GENERIC_AGENT_PRODUCT_DISCUSSION.md
+_internal_stream_core_review.md
+PLAN.md
+RELEASE_NOTES_v0.3_v0.4.1.md
+RELEASE_NOTES_v0.4.1_v0.5.0.md
+FLOW.md
+REFACTOR_PLAN.md
+BUG.MD
+log.md
+pool-for-group-test.md
+docs/
+cli.json
+src-tauri/src/services/learnings_translation.md
+
+# Rust / Tauri
+src-tauri/target
+
+# Build artifacts
+tsconfig.tsbuildinfo
+release/
+release-artifacts/
+dist-web-admin/
+src-tauri/.build-counter
+
+# Test artifacts
+.playwright-mcp/
+playwright-report/
+test-results/
+
+# Snapshots / temporary verification assets
+*-snapshot.md
+*-verified.png
+i18n_implementation_plan.md
+
+# Sensitive local files
+key.txt
+*.key
+.scripts/
+src-tauri/icons/Square48x48Logo.png
+
+# Local database files
+api-switch.db
+*.db
+*.db-shm
+*.db-wal
+
+# Local build helper
+build.ps1
+
+
+# Reference docs
+azure_openai_reference.html
+azure_openai_reference.md
+azure_responses.html
+azure_responses.md
+openai_chat_ref.html
+openai_docs_response.html
+
+# Design assets (not for repo)
+design/
+/icon.jpg
+/icon1.png
+/icon2.png
+/icon3.png
+/icon4.png
+/icon5.png
+/star.jpg
+/ui-*.png
+doubao-color(*).svg
+xiaomi-*(*).svg
+zhipu-color(*).svg
+
+
+# Temp / tool dirs
+tmp/
+.tmp/
+.atomcode/
+.claude/
+.sisyphus/
+.codex_tmp/
+
+# Playwright e2e tests - local development only
+playwright.config.ts
+tests/
+
+# Other agents' build artifacts
+src-tauri/target-codex*/
+
+# VSCode settings
+.vscode/settings.json
+
+# Agent-specific
+HEADLESS.md
+
