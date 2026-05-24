@@ -1,4 +1,4 @@
-import { BarChart3, BookOpen, ExternalLink, FileText, KeyRound, Layers, LogOut, Power, Route, Settings } from 'lucide-react';
+import { BarChart3, ExternalLink, FileText, KeyRound, Layers, LogOut, Power, Route, Settings } from 'lucide-react';
 
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
@@ -8,7 +8,7 @@ import { Toaster } from 'sonner';
 import { cn } from '@/lib/utils';
 import type { AdminStatus, AppSettings, ProxyStatus } from '@/types';
 
-export type MainPage = 'apiPool' | 'channels' | 'tokens' | 'logs' | 'dashboard' | 'translator' | 'settings' | 'guide';
+export type MainPage = 'apiPool' | 'channels' | 'tokens' | 'logs' | 'dashboard' | 'translator' | 'settings';
 
 const NAV_ITEMS: { key: MainPage; icon: typeof Layers; labelKey: string; externalLang?: Record<string, string> }[] = [
   { key: 'apiPool', icon: Layers, labelKey: 'nav.apiPool' },
@@ -28,7 +28,6 @@ export interface MainShellProps {
   onUpdateDismiss?: () => void;
   onUpdateOpen?: (url: string) => void;
   onNavigate: (page: MainPage) => void;
-  onOpenGuide?: (path: string) => void;
   onLogout?: () => void;
   renderPage: () => React.ReactNode;
   children?: React.ReactNode;
@@ -43,12 +42,11 @@ export function MainShell({
   onUpdateDismiss,
   onUpdateOpen,
   onNavigate,
-  onOpenGuide,
   onLogout,
   renderPage,
   children,
 }: MainShellProps) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
 
   return (
     <div className="flex h-screen flex-col bg-background overflow-y-scroll">
@@ -95,19 +93,6 @@ export function MainShell({
                   {t(labelKey)}
                 </Button>
               ))}
-              <Separator className="my-1" />
-              <Button
-                variant="ghost"
-                className="w-full justify-start gap-2 px-3"
-                onClick={() => {
-                  const lang = i18n.language.startsWith('zh') ? 'zh' : 'en';
-                  const guidePath = lang === 'zh' ? 'GUIDE_CN.md' : 'GUIDE.md';
-                  onOpenGuide?.(guidePath);
-                }}
-              >
-                <BookOpen className="h-4 w-4" />
-                {t('nav.guide', '使用指南')}
-              </Button>
               {onLogout && (
                 <>
                   <Separator className="my-1" />

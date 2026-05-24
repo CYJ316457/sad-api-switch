@@ -5,6 +5,7 @@ import { useEvent } from "@/lib/events";
 import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { useApiAdapter } from "@/lib/useApiAdapter";
+import { formatTokenCount } from "@/lib/numberFormat";
 import type { UsageLogFilter } from "@/types";
 
 interface UsageLogMeta {
@@ -184,10 +185,10 @@ export function LogPage() {
         <Card>
           <CardContent className="p-4">
             <div className="text-sm text-muted-foreground">{t("log.promptTokens")}</div>
-            <div className="text-2xl font-semibold mt-1">{todayStats?.total_prompt_tokens ?? 0}</div>
+            <div className="text-2xl font-semibold mt-1">{formatTokenCount(todayStats?.total_prompt_tokens ?? 0)}</div>
             {totalCacheRead > 0 ? (
               <div className="text-xs text-muted-foreground mt-1">
-                缓存 {totalCacheRead} 缓存率 {cacheRate(totalCacheRead, loadedPromptTokens)}%
+                缓存 {formatTokenCount(totalCacheRead)} 缓存率 {cacheRate(totalCacheRead, loadedPromptTokens)}%
               </div>
             ) : null}
           </CardContent>
@@ -195,7 +196,7 @@ export function LogPage() {
         <Card>
           <CardContent className="p-4">
             <div className="text-sm text-muted-foreground">{t("log.completionTokens")}</div>
-            <div className="text-2xl font-semibold mt-1">{todayStats?.total_completion_tokens ?? 0}</div>
+            <div className="text-2xl font-semibold mt-1">{formatTokenCount(todayStats?.total_completion_tokens ?? 0)}</div>
           </CardContent>
         </Card>
         <Card>
@@ -248,15 +249,15 @@ export function LogPage() {
                     <td className="px-3 py-2 font-mono text-xs min-w-0"><div className="truncate" title={resolvedModel}>{resolvedModel}</div></td>
                     <td className="px-2 py-2 whitespace-nowrap"><div className="truncate" title={`${log.use_time || Math.ceil(log.latency_ms / 1000)}s${log.is_stream && log.first_token_ms > 0 ? ` / ${(log.first_token_ms / 1000).toFixed(1)}s` : ""}  ${log.is_stream ? t("log.streamShort") : t("log.nonStreamShort")}`}>{`${log.use_time || Math.ceil(log.latency_ms / 1000)}s${log.is_stream && log.first_token_ms > 0 ? `/${(log.first_token_ms / 1000).toFixed(1)}s` : ""}`}</div></td>
                     <td className="px-3 py-2 text-right leading-tight">
-                      <div>{log.prompt_tokens}</div>
+                      <div>{formatTokenCount(log.prompt_tokens)}</div>
                       {cacheReadTokens > 0 ? (
                         <>
-                          <div className="text-[11px] text-muted-foreground">缓存读 {cacheReadTokens}</div>
+                          <div className="text-[11px] text-muted-foreground">缓存读 {formatTokenCount(cacheReadTokens)}</div>
                           <div className="text-[11px] text-muted-foreground">缓存率 {cacheRate(cacheReadTokens, log.prompt_tokens)}%</div>
                         </>
                       ) : null}
                     </td>
-                    <td className="px-3 py-2 text-right">{log.completion_tokens}</td>
+                    <td className="px-3 py-2 text-right">{formatTokenCount(log.completion_tokens)}</td>
                     <td className="px-3 py-2 whitespace-nowrap"><span className={log.success ? "text-green-600" : "text-red-500"}>{log.success ? t("log.success") : t("log.failed")}</span></td>
                   </tr>
                   {isExpanded ? (

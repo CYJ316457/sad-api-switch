@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { useApiAdapter } from "@/lib/useApiAdapter";
+import { formatTokenCount } from "@/lib/numberFormat";
 import type { DashboardFilter } from "@/types";
 import {
   BarChart,
@@ -31,30 +32,6 @@ type SeriesPoint = {
   time: string;
   [key: string]: string | number;
 };
-
-function formatCompactNumber(value: number): string {
-  const abs = Math.abs(value);
-  const units = [
-    { value: 1_000_000_000_000, suffix: "T" },
-    { value: 1_000_000_000, suffix: "B" },
-    { value: 1_000_000, suffix: "M" },
-    { value: 1_000, suffix: "K" },
-  ];
-
-  for (const unit of units) {
-    if (abs >= unit.value) {
-      const scaled = value / unit.value;
-      const digits = Math.abs(scaled) >= 10 ? 0 : 1;
-      return `${scaled.toFixed(digits).replace(/\.0$/, "")}${unit.suffix}`;
-    }
-  }
-
-  return String(value);
-}
-
-function formatFullNumber(value: number): string {
-  return new Intl.NumberFormat().format(value);
-}
 
 function buildSeriesData(
   items: Array<{ time: string; model: string; value: number }> | undefined,
@@ -95,12 +72,12 @@ function buildSeriesData(
   };
 }
 
-function StatCard({ title, value, totalLabel }: { title: string; value: number; totalLabel?: string }) {
+function StatCard({ title, value, totalLabel, compactValue = false }: { title: string; value: number; totalLabel?: string; compactValue?: boolean }) {
   return (
     <Card>
       <CardContent className="p-4">
         <p className="text-sm text-muted-foreground">{title}</p>
-        <p className="text-2xl font-bold mt-1">{value.toLocaleString()}</p>
+        <p className="text-2xl font-bold mt-1">{compactValue ? formatTokenCount(value) : value.toLocaleString()}</p>
         {totalLabel !== undefined && (
           <p className="text-xs text-muted-foreground mt-1">{totalLabel}</p>
         )}
@@ -165,17 +142,20 @@ export function DashboardView() {
         <StatCard
           title={t("dashboard.cards.todayTokens")}
           value={todayTokens}
-          totalLabel={`${t("dashboard.cards.total")}: ${totalTokens.toLocaleString()}`}
+          compactValue
+          totalLabel={`${t("dashboard.cards.total")}: ${formatTokenCount(totalTokens)}`}
         />
         <StatCard
           title={t("dashboard.cards.todayPrompt")}
           value={stats?.today_prompt_tokens ?? 0}
-          totalLabel={`${t("dashboard.cards.total")}: ${(stats?.total_prompt_tokens ?? 0).toLocaleString()}`}
+          compactValue
+          totalLabel={`${t("dashboard.cards.total")}: ${formatTokenCount(stats?.total_prompt_tokens ?? 0)}`}
         />
         <StatCard
           title={t("dashboard.cards.todayCompletion")}
           value={stats?.today_completion_tokens ?? 0}
-          totalLabel={`${t("dashboard.cards.total")}: ${(stats?.total_completion_tokens ?? 0).toLocaleString()}`}
+          compactValue
+          totalLabel={`${t("dashboard.cards.total")}: ${formatTokenCount(stats?.total_completion_tokens ?? 0)}`}
         />
       </div>
 
@@ -214,8 +194,8 @@ export function DashboardView() {
                   <BarChart data={consumptionSeries.data}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="time" />
-                    <YAxis tickFormatter={(value) => formatCompactNumber(Number(value))} />
-                    <Tooltip formatter={(value) => formatFullNumber(Number(value))} />
+                    <YAxis tickFormatter={(value) => formatTokenCount(Number(value))} />
+                    <Tooltip formatter={(value) => formatTokenCount(Number(value))} />
                     <Legend />
                     {consumptionSeries.series.map((series, index) => (
                       <Bar

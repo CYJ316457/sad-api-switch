@@ -299,7 +299,9 @@ function GroupSelector({
               <span className="truncate">{t("apiPool.group.create", { name: draft.trim() })}</span>
             </button>
           ) : (
-            <Link2Off className="h-3.5 w-3.5 shrink-0 text-amber-500" title={t("apiPool.mapping.unmappedHint")} />
+            <span title={t("apiPool.mapping.unmappedHint")} className="inline-flex shrink-0">
+              <Link2Off className="h-3.5 w-3.5 text-amber-500" />
+            </span>
           )}
         </div>
       </PopoverContent>
@@ -373,7 +375,9 @@ function CardBody({
               <span className="text-sm text-muted-foreground truncate">{upstreamModel}</span>
             </>
           ) : (
-            <Link2Off className="h-3.5 w-3.5 shrink-0 text-amber-500" title={t("apiPool.mapping.unmappedHint")} />
+            <span title={t("apiPool.mapping.unmappedHint")} className="inline-flex shrink-0">
+              <Link2Off className="h-3.5 w-3.5 text-amber-500" />
+            </span>
           )}
           <StatusDot state={getEntryStatus(entry)} />
           <span className="font-medium truncate">{entry.channel_name || "—"}</span>

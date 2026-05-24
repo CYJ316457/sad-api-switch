@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronRight, Plug, Terminal } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import bundledCliData from "../../cli.json";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,7 +25,7 @@ export interface CliItem {
   };
 }
 
-const BUNDLED = bundledCliData as CliItem[];
+const BUNDLED: CliItem[] = [];
 
 function defaultValue(envKey: string, baseUrl: string, accessKey: string) {
   if (envKey.includes("BASE_URL")) return baseUrl;

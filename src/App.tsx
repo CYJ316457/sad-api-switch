@@ -23,8 +23,6 @@ type WebAuthViewState =
   | { state: "server_unreachable"; message: string }
   | { state: "expired"; message: string };
 
-const GUIDE_BASE = "https://github.com/wang1970/API-Switch/blob/master/";
-
 function MainApp({ onLogout }: { onLogout?: () => void }) {
   const { i18n } = useTranslation();
   const api = useApiAdapter();
@@ -130,7 +128,6 @@ function MainApp({ onLogout }: { onLogout?: () => void }) {
       onUpdateDismiss={() => setUpdateInfo(null)}
       onUpdateOpen={(url) => openExternal(url)}
       onNavigate={setCurrentPage}
-      onOpenGuide={(path) => openExternal(GUIDE_BASE + path)}
       onLogout={onLogout}
       renderPage={() => (
         <Suspense fallback={<div className="flex items-center justify-center min-h-screen">Loading...</div>}>
