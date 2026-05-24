@@ -19,8 +19,6 @@ const NAV_ITEMS: { key: MainPage; icon: typeof Layers; labelKey: string; externa
     { key: 'settings', icon: Settings, labelKey: 'nav.settings' },
   ];
 
-const starImageSrc = `${import.meta.env.BASE_URL}star.jpg`;
-
 export interface MainShellProps {
   currentPage: MainPage;
   proxyStatus?: ProxyStatus | null;
@@ -123,11 +121,6 @@ export function MainShell({
           </ScrollArea>
 
           <div className="px-2 pb-4">
-            <div className="flex justify-center">
-              <a href="https://github.com/wang1970/API-Switch" target="_blank" rel="noopener noreferrer">
-                <img src={starImageSrc} alt="Star on GitHub" className="cursor-pointer transition-opacity hover:opacity-80" />
-              </a>
-            </div>
             <div className="mt-2 flex items-center justify-center gap-2 text-xs text-muted-foreground">
               <span className={cn('inline-block h-4 w-4 rounded-full', proxyStatus?.running ? 'bg-green-500' : 'bg-red-500')} />
               <span className={cn('inline-block h-4 w-4 rounded-full', adminStatus?.running ? 'bg-green-500' : 'bg-red-500')} />
