@@ -513,7 +513,9 @@
   },
   "update": {
     "newVersion": "New version v{{version}} available",
-    "goDownload": "Download"
+    "goDownload": "Download",
+    "installNow": "Update now",
+    "installing": "Updating..."
   },
   "guide": {
     "title": "Quick Start",

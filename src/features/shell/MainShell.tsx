@@ -7,6 +7,7 @@ import { Separator } from '@/components/ui/separator';
 import { Toaster } from 'sonner';
 import { cn } from '@/lib/utils';
 import type { AdminStatus, AppSettings, ProxyStatus } from '@/types';
+import type { UpdateInfo } from '@/lib/api';
 
 export type MainPage = 'apiPool' | 'channels' | 'tokens' | 'logs' | 'dashboard' | 'translator' | 'settings';
 
@@ -24,9 +25,11 @@ export interface MainShellProps {
   proxyStatus?: ProxyStatus | null;
   adminStatus?: AdminStatus | null;
   settings?: AppSettings | null;
-  updateInfo?: { current: string; latest: string; url: string } | null;
+  updateInfo?: UpdateInfo | null;
+  installingUpdate?: boolean;
   onUpdateDismiss?: () => void;
   onUpdateOpen?: (url: string) => void;
+  onUpdateInstall?: (info: UpdateInfo) => void;
   onNavigate: (page: MainPage) => void;
   onLogout?: () => void;
   renderPage: () => React.ReactNode;
@@ -39,8 +42,10 @@ export function MainShell({
   adminStatus,
   settings,
   updateInfo,
+  installingUpdate,
   onUpdateDismiss,
   onUpdateOpen,
+  onUpdateInstall,
   onNavigate,
   onLogout,
   renderPage,
@@ -53,6 +58,14 @@ export function MainShell({
       {updateInfo && (
         <div className="flex shrink-0 items-center justify-center gap-2 bg-primary/10 px-3 py-1.5 text-xs text-primary">
           <span>{t('update.newVersion', { version: updateInfo.latest })}</span>
+          <button
+            type="button"
+            onClick={() => onUpdateInstall?.(updateInfo)}
+            disabled={installingUpdate}
+            className="inline-flex items-center gap-1 rounded bg-primary px-2 py-0.5 text-primary-foreground disabled:opacity-60"
+          >
+            {installingUpdate ? t('update.installing') : t('update.installNow')}
+          </button>
           <button
             type="button"
             onClick={() => onUpdateOpen?.(updateInfo.url)}

@@ -8,7 +8,7 @@ import { MainShell, type MainPage } from "@/features/shell/MainShell";
 import { useApiAdapter, isTauriRuntime } from "@/lib/useApiAdapter";
 import { LoginScreen } from "@/components/LoginScreen";
 import { AUTH_EXPIRED_EVENT, clearToken, getToken, logout, validateToken, type AuthExpiredDetail, TOKEN_KEY } from "@/lib/webAuth";
-import { checkUpdate, type UpdateInfo } from "@/lib/api";
+import { checkUpdate, installUpdate, type UpdateInfo } from "@/lib/api";
 
 const ApiPoolPage = lazy(() => import("@/pages/ApiPoolPage").then((m) => ({ default: m.ApiPoolPage })));
 const ChannelPage = lazy(() => import("@/pages/ChannelPage").then((m) => ({ default: m.ChannelPage })));
@@ -63,7 +63,8 @@ function MainApp({ onLogout }: { onLogout?: () => void }) {
   });
 
   const [guideOpen, setGuideOpen] = useState(false);
-  const [updateInfo, setUpdateInfo] = useState<{ current: string; latest: string; url: string } | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [installingUpdate, setInstallingUpdate] = useState(false);
 
   useEffect(() => {
     if (!isDesktop) return;
@@ -104,6 +105,18 @@ function MainApp({ onLogout }: { onLogout?: () => void }) {
     else window.open(url, "_blank", "noopener,noreferrer");
   };
 
+  const handleInstallUpdate = async (info: UpdateInfo) => {
+    if (installingUpdate) return;
+    setInstallingUpdate(true);
+    toast.info(`正在下载并安装 v${info.latest}，请不要关闭程序`);
+    try {
+      await installUpdate(info);
+    } catch (err) {
+      setInstallingUpdate(false);
+      toast.error(`自动更新失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
   const renderPage = () => {
     const page = (() => {
       switch (currentPage) {
@@ -125,8 +138,10 @@ function MainApp({ onLogout }: { onLogout?: () => void }) {
       adminStatus={adminStatus}
       settings={settings}
       updateInfo={updateInfo}
+      installingUpdate={installingUpdate}
       onUpdateDismiss={() => setUpdateInfo(null)}
       onUpdateOpen={(url) => openExternal(url)}
+      onUpdateInstall={handleInstallUpdate}
       onNavigate={setCurrentPage}
       onLogout={onLogout}
       renderPage={() => (

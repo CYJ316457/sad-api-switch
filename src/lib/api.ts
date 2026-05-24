@@ -223,10 +223,17 @@ export interface UpdateInfo {
   current: string;
   latest: string;
   url: string;
+  assetName: string;
+  downloadUrl: string;
+  assetSize: number;
 }
 
 export async function checkUpdate(): Promise<UpdateInfo | null> {
   return invoke("check_update");
+}
+
+export async function installUpdate(info: Pick<UpdateInfo, "downloadUrl" | "assetName">): Promise<void> {
+  return invoke("install_update", { params: info });
 }
 
 // --- Tray ---
