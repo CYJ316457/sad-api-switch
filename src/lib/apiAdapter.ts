@@ -6,8 +6,8 @@ export interface ApiAdapter {
     update(params: UpdateChannelParams): Promise<Channel>;
     delete(id: string): Promise<void>;
     fetchModels(channelId: string): Promise<FetchModelsResult>;
-    fetchModelsDirect(apiType: string, baseUrl: string, apiKey: string, verified?: boolean): Promise<FetchModelsResult>;
-    probeUrl(url: string): Promise<ProbeResult>;
+    fetchModelsDirect(apiType: string, baseUrl: string, apiKey: string, verified?: boolean, useSystemProxy?: boolean): Promise<FetchModelsResult>;
+    probeUrl(url: string, useSystemProxy?: boolean): Promise<ProbeResult>;
     testChannel(channelId: string): Promise<TestChannelResult>;
     selectModels(channelId: string, modelNames: string[], availableModels: ModelInfo[], catalogMeta?: ModelCatalogMetaUpdate[]): Promise<void>;
     updateResponseMs(channelId: string, responseMs: string): Promise<void>;

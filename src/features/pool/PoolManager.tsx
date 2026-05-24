@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { GripVertical, Plus, MessageSquare, RefreshCw, XCircle, X, Trash2, Check, ChevronsUpDown, Tag, Link2Off } from "lucide-react";
+import { GripVertical, Plus, MessageSquare, RefreshCw, XCircle, X, Trash2, Check, ChevronsUpDown, Tag, Link2Off, Network } from "lucide-react";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
@@ -327,6 +327,7 @@ function CardBody({
   catalogFeatures,
   modelMetaZh,
   modelMetaEn,
+  useSystemProxy,
 }: {
   entry: ApiEntry;
   onTest: (entry: ApiEntry) => void;
@@ -345,6 +346,7 @@ function CardBody({
   catalogFeatures: string[];
   modelMetaZh?: string;
   modelMetaEn?: string;
+  useSystemProxy?: boolean;
 }) {
   const { t } = useTranslation();
   const cooldownRemaining = formatCooldownRemaining(entry.cooldown_until);
@@ -380,6 +382,11 @@ function CardBody({
             </span>
           )}
           <StatusDot state={getEntryStatus(entry)} />
+          {useSystemProxy ? (
+            <span title="当前模型的渠道走系统代理" className="inline-flex shrink-0">
+              <Network className="h-3.5 w-3.5 text-blue-500" />
+            </span>
+          ) : null}
           <span className="font-medium truncate">{entry.channel_name || "—"}</span>
           {testingEntryIds?.has(entry.id) ? <RefreshCw className="h-3 w-3 animate-spin text-muted-foreground shrink-0" />
             : testResult === "X" ? <XCircle className="h-3 w-3 text-red-500 shrink-0" />
@@ -440,6 +447,7 @@ function SortablePoolEntryCard(props: {
   catalogFeatures: string[];
   modelMetaZh?: string;
   modelMetaEn?: string;
+  useSystemProxy?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: props.entry.id });
   const style = { transform: CSS.Transform.toString(transform), transition, zIndex: isDragging ? 10 : undefined, opacity: isDragging ? 0.8 : undefined };
@@ -473,6 +481,7 @@ function PoolEntryCard(props: {
   catalogFeatures: string[];
   modelMetaZh?: string;
   modelMetaEn?: string;
+  useSystemProxy?: boolean;
 }) {
   return (
     <Card className={cn("transition-opacity", !props.entry.enabled && "opacity-60")}>
@@ -686,6 +695,13 @@ export function PoolManager() {
   });
 
   const { data: channels, isLoading: channelsLoading } = useQuery({ queryKey: ["channels", "all"], queryFn: () => adapter.channels.list() as Promise<Channel[]>, staleTime: 2000 });
+  const channelProxyMap = useMemo(() => {
+    const map = new Map<string, boolean>();
+    for (const channel of channels ?? []) {
+      map.set(channel.id, channel.use_system_proxy ?? false);
+    }
+    return map;
+  }, [channels]);
 
   // 分组列表从轻量接口单独拉取
   const { data: groupList } = useQuery({
@@ -1022,7 +1038,7 @@ const handleToggleIntent = useCallback(async (entry: ApiEntry, enabled: boolean,
                   <div className="flex flex-col gap-3">
                     {filteredEntries.map((entry) => {
                       const meta = getEntryDisplayMeta(entry, catalogMap);
-                      return <SortablePoolEntryCard key={entry.id} entry={entry} onTest={setTestEntry} onDelete={(entry, opts) => { setDeleteDialog({ entry, channelMode: !!opts?.shiftKey }); }} onToggleIntent={handleToggleIntent} onEditMapping={handleMappingEdit} onGroupChange={handleGroupChange} groups={groups} testingEntryIds={testingEntryIds} testResult={testResults[entry.id]} testErrorDetail={testErrorDetails[entry.id]} catalogLogo={meta.logo} catalogReleaseDate={meta.releaseDate} catalogContext={meta.context} catalogOutput={meta.output} catalogFeatures={meta.features} modelMetaZh={meta.modelMetaZh} modelMetaEn={meta.modelMetaEn} />;
+                      return <SortablePoolEntryCard key={entry.id} entry={entry} onTest={setTestEntry} onDelete={(entry, opts) => { setDeleteDialog({ entry, channelMode: !!opts?.shiftKey }); }} onToggleIntent={handleToggleIntent} onEditMapping={handleMappingEdit} onGroupChange={handleGroupChange} groups={groups} testingEntryIds={testingEntryIds} testResult={testResults[entry.id]} testErrorDetail={testErrorDetails[entry.id]} catalogLogo={meta.logo} catalogReleaseDate={meta.releaseDate} catalogContext={meta.context} catalogOutput={meta.output} catalogFeatures={meta.features} modelMetaZh={meta.modelMetaZh} modelMetaEn={meta.modelMetaEn} useSystemProxy={channelProxyMap.get(entry.channel_id)} />;
                     })}
                     {/* 无限滚动 sentinel */}
                     <div ref={sentinelRef} className="h-4" />
@@ -1038,7 +1054,7 @@ const handleToggleIntent = useCallback(async (entry: ApiEntry, enabled: boolean,
               <div className="flex flex-col gap-3">
                 {filteredEntries.map((entry) => {
                   const meta = getEntryDisplayMeta(entry, catalogMap);
-                  return <PoolEntryCard key={entry.id} entry={entry} onTest={setTestEntry} onDelete={(entry, opts) => { setDeleteDialog({ entry, channelMode: !!opts?.shiftKey }); }} onToggleIntent={handleToggleIntent} onEditMapping={handleMappingEdit} onGroupChange={handleGroupChange} groups={groups} testingEntryIds={testingEntryIds} testResult={testResults[entry.id]} testErrorDetail={testErrorDetails[entry.id]} catalogLogo={meta.logo} catalogReleaseDate={meta.releaseDate} catalogContext={meta.context} catalogOutput={meta.output} catalogFeatures={meta.features} modelMetaZh={meta.modelMetaZh} modelMetaEn={meta.modelMetaEn} />;
+                  return <PoolEntryCard key={entry.id} entry={entry} onTest={setTestEntry} onDelete={(entry, opts) => { setDeleteDialog({ entry, channelMode: !!opts?.shiftKey }); }} onToggleIntent={handleToggleIntent} onEditMapping={handleMappingEdit} onGroupChange={handleGroupChange} groups={groups} testingEntryIds={testingEntryIds} testResult={testResults[entry.id]} testErrorDetail={testErrorDetails[entry.id]} catalogLogo={meta.logo} catalogReleaseDate={meta.releaseDate} catalogContext={meta.context} catalogOutput={meta.output} catalogFeatures={meta.features} modelMetaZh={meta.modelMetaZh} modelMetaEn={meta.modelMetaEn} useSystemProxy={channelProxyMap.get(entry.channel_id)} />;
                 })}
                 <div ref={sentinelRef} className="h-4" />
                 {isFetchingNextPage && (

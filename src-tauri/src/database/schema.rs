@@ -13,6 +13,7 @@ pub fn create_tables(conn: &Connection) -> Result<(), AppError> {
             available_models TEXT DEFAULT '[]',
             selected_models TEXT DEFAULT '[]',
             enabled INTEGER DEFAULT 1,
+            use_system_proxy INTEGER DEFAULT 0,
             last_fetch_at INTEGER DEFAULT 0,
             notes TEXT,
             created_at INTEGER NOT NULL,
@@ -228,6 +229,7 @@ fn ensure_api_entry_columns(conn: &Connection) -> Result<(), AppError> {
 
 fn ensure_channel_columns(conn: &Connection) -> Result<(), AppError> {
     ensure_column(conn, "channels", "response_ms", "TEXT DEFAULT ''")?;
+    ensure_column(conn, "channels", "use_system_proxy", "INTEGER DEFAULT 0")?;
     Ok(())
 }
 

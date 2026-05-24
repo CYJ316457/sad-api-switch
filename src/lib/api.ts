@@ -54,8 +54,8 @@ export async function fetchModels(channelId: string): Promise<FetchModelsResult>
     return invoke("fetch_models", { channelId });
 }
 
-export async function fetchModelsDirect(apiType: string, baseUrl: string, apiKey: string, verified = false): Promise<FetchModelsResult> {
-    return invoke("fetch_models_direct", { apiType, baseUrl, apiKey, verified });
+export async function fetchModelsDirect(apiType: string, baseUrl: string, apiKey: string, verified = false, useSystemProxy = false): Promise<FetchModelsResult> {
+    return invoke("fetch_models_direct", { apiType, baseUrl, apiKey, verified, useSystemProxy });
 }
 
 export async function selectModels(channelId: string, modelNames: string[], availableModels: ModelInfo[], catalogMeta: ModelCatalogMetaUpdate[] = []): Promise<void> {
@@ -256,8 +256,8 @@ export async function testChat(
 
 // --- URL Probe ---
 
-export async function probeUrl(url: string): Promise<ProbeResult> {
-    return invoke("probe_url", { url });
+export async function probeUrl(url: string, useSystemProxy = false): Promise<ProbeResult> {
+    return invoke("probe_url", { url, useSystemProxy });
 }
 
 // --- Pool Groups ---

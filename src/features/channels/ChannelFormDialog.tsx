@@ -15,8 +15,8 @@ export const ChannelFormDialog: React.FC<Props> = ({ channel, onClose, onSaved }
   const api = useApiAdapter();
   const [form, setForm] = useState<CreateChannelParams | UpdateChannelParams>(
     channel
-      ? { id: channel.id, name: channel.name, api_type: channel.api_type, base_url: channel.base_url, api_key: channel.api_key, enabled: channel.enabled, notes: channel.notes }
-      : { name: '', api_type: '', base_url: '', api_key: '' }
+      ? { id: channel.id, name: channel.name, api_type: channel.api_type, base_url: channel.base_url, api_key: channel.api_key, enabled: channel.enabled, use_system_proxy: channel.use_system_proxy, notes: channel.notes }
+      : { name: '', api_type: '', base_url: '', api_key: '', use_system_proxy: false }
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -26,6 +26,10 @@ export const ChannelFormDialog: React.FC<Props> = ({ channel, onClose, onSaved }
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setForm((current) => ({ ...current, [name]: value }));
+  };
+  const handleCheckboxChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, checked } = e.target;
+    setForm((current) => ({ ...current, [name]: checked }));
   };
   const handleSubmit = async () => {
     setSaving(true);
@@ -51,6 +55,10 @@ export const ChannelFormDialog: React.FC<Props> = ({ channel, onClose, onSaved }
       <input name="api_type" placeholder={t('channel.form.placeholderApiType')} value={formValues.api_type || ''} onChange={handleChange} />
       <input name="base_url" placeholder={t('channel.form.placeholderBaseUrl')} value={formValues.base_url || ''} onChange={handleChange} />
       <input name="api_key" placeholder={t('channel.form.placeholderApiKey')} value={formValues.api_key || ''} onChange={handleChange} />
+      <label>
+        <input name="use_system_proxy" type="checkbox" checked={!!formValues.use_system_proxy} onChange={handleCheckboxChange} />
+        走系统代理
+      </label>
       <button onClick={handleSubmit} disabled={saving}>{saving ? t('channel.form.saving') : t('channel.form.save')}</button>
       <button onClick={onClose} disabled={saving}>{t('channel.form.cancel')}</button>
     </div>

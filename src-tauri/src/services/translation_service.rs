@@ -101,7 +101,11 @@ async fn perform_llm_call(
     });
     adapter.transform_request(&mut upstream_body, upstream_model);
 
-    let client = reqwest::Client::new();
+    let client = crate::http_client::channel_client(
+        channel.use_system_proxy,
+        std::time::Duration::from_secs(30),
+    )
+    .map_err(|e| format!("HTTP client: {e}"))?;
     let request = adapter
         .apply_auth(client.post(&url), &channel.api_key)
         .json(&upstream_body);

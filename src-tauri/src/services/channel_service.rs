@@ -102,6 +102,8 @@ pub struct CreateChannelParams {
     pub api_type: String,
     pub base_url: String,
     pub api_key: String,
+    #[serde(default)]
+    pub use_system_proxy: bool,
     pub notes: Option<String>,
 }
 
@@ -113,6 +115,7 @@ pub struct UpdateChannelParams {
     pub base_url: Option<String>,
     pub api_key: Option<String>,
     pub enabled: Option<bool>,
+    pub use_system_proxy: Option<bool>,
     pub notes: Option<String>,
 }
 
@@ -218,6 +221,7 @@ pub fn create_channel(db: &Database, params: CreateChannelParams) -> Result<Chan
         &params.api_type,
         &params.base_url,
         &params.api_key,
+        params.use_system_proxy,
         params.notes.as_deref(),
     )
 }
@@ -237,6 +241,7 @@ pub fn update_channel(
         params.base_url.as_deref(),
         params.api_key.as_deref(),
         params.enabled,
+        params.use_system_proxy,
         params.notes.as_deref(),
     )?;
     if let Some(app) = app {
@@ -261,7 +266,7 @@ pub fn delete_channel(
     Ok(())
 }
 
-pub async fn probe_url(url: String) -> Result<ProbeResult, AppError> {
+pub async fn probe_url(url: String, use_system_proxy: bool) -> Result<ProbeResult, AppError> {
     // identical implementation from original command
     let url = url.trim_end_matches('/').trim();
     if url.is_empty() {
@@ -277,10 +282,7 @@ pub async fn probe_url(url: String) -> Result<ProbeResult, AppError> {
             )),
         });
     }
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .danger_accept_invalid_certs(true)
-        .build()
+    let client = crate::http_client::channel_client(use_system_proxy, std::time::Duration::from_secs(10))
         .map_err(|e| AppError::Network(format!("HTTP client: {e}")))?;
 
     let start = std::time::Instant::now();
@@ -339,6 +341,7 @@ pub async fn fetch_models_direct(
     base_url: String,
     api_key: String,
     verified: Option<bool>,
+    use_system_proxy: Option<bool>,
 ) -> Result<FetchModelsResult, AppError> {
     let base_url = normalize_base_url(&base_url);
     if base_url.is_empty() {
@@ -356,7 +359,13 @@ pub async fn fetch_models_direct(
             auto_saved: false,
         });
     }
-    smart_fetch_models(&api_type, &base_url, &api_key, verified.unwrap_or(false))
+    smart_fetch_models(
+        &api_type,
+        &base_url,
+        &api_key,
+        verified.unwrap_or(false),
+        use_system_proxy.unwrap_or(false),
+    )
         .await
         .map_err(|e| AppError::Network(e.message))
 }
@@ -368,7 +377,13 @@ pub async fn fetch_models(
     let channel = db.get_channel(&channel_id)?;
     let original_base_url = normalize_base_url(&channel.base_url);
     let endpoint_guess =
-        detect_endpoint_guess(&channel.api_type, &channel.base_url, &channel.api_key).await;
+        detect_endpoint_guess(
+            &channel.api_type,
+            &channel.base_url,
+            &channel.api_key,
+            channel.use_system_proxy,
+        )
+        .await;
     let Some(guess) = endpoint_guess else {
         return Ok(FetchModelsResult {
             detected_type: channel.api_type,
@@ -393,6 +408,7 @@ pub async fn fetch_models(
         &guess.detected_type,
         &guess.corrected_base_url,
         &channel.api_key,
+        channel.use_system_proxy,
     )
     .await
     {
@@ -459,6 +475,7 @@ async fn smart_fetch_models(
     base_url: &str,
     api_key: &str,
     verified: bool,
+    use_system_proxy: bool,
 ) -> Result<FetchModelsResult, ChannelOperationError> {
     let base_url = normalize_base_url(base_url);
 
@@ -468,7 +485,7 @@ async fn smart_fetch_models(
             corrected_base_url: base_url.clone(),
         })
     } else {
-        detect_endpoint_guess(api_type, &base_url, api_key).await
+        detect_endpoint_guess(api_type, &base_url, api_key, use_system_proxy).await
     };
 
     if !verified && endpoint_guess.is_none() {
@@ -487,7 +504,13 @@ async fn smart_fetch_models(
         .unwrap_or(base_url.as_str());
 
     let (models, actual_type, actual_base_url) =
-        fetch_models_result_with_fallback(fetch_seed_type, fetch_seed_base_url, api_key).await?;
+        fetch_models_result_with_fallback(
+            fetch_seed_type,
+            fetch_seed_base_url,
+            api_key,
+            use_system_proxy,
+        )
+        .await?;
 
     let corrected_type = endpoint_guess
         .as_ref()
@@ -518,12 +541,11 @@ async fn detect_endpoint_guess(
     api_type: &str,
     base_url: &str,
     api_key: &str,
+    use_system_proxy: bool,
 ) -> Option<EndpointGuess> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .danger_accept_invalid_certs(true)
-        .build()
-        .ok()?;
+    let client =
+        crate::http_client::channel_client(use_system_proxy, std::time::Duration::from_secs(10))
+            .ok()?;
 
     let original_url = normalize_base_url(&base_url);
     let base_site = extract_base_site(&original_url).unwrap_or_else(|| original_url.clone());
@@ -617,14 +639,16 @@ async fn fetch_models_result_with_fallback(
     preferred_type: &str,
     preferred_base_url: &str,
     api_key: &str,
+    use_system_proxy: bool,
 ) -> Result<(Vec<ModelInfo>, &'static str, String), ChannelOperationError> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .danger_accept_invalid_certs(true)
-        .build()
-        .map_err(|e| {
-            ChannelOperationError::new(ERROR_CODE_HTTP_CLIENT_ERROR, format!("HTTP client: {e}"))
-        })?;
+    let client =
+        crate::http_client::channel_client(use_system_proxy, std::time::Duration::from_secs(10))
+            .map_err(|e| {
+                ChannelOperationError::new(
+                    ERROR_CODE_HTTP_CLIENT_ERROR,
+                    format!("HTTP client: {e}"),
+                )
+            })?;
 
     let candidates = build_base_url_candidates(preferred_base_url);
     let try_types = build_try_types(preferred_type);
@@ -1042,12 +1066,13 @@ pub async fn test_channel_chat(
     api_key: &str,
     api_type: &str,
     model: &str,
+    use_system_proxy: bool,
 ) -> TestChannelResult {
     let start = std::time::Instant::now();
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-    {
+    let client = match crate::http_client::channel_client(
+        use_system_proxy,
+        std::time::Duration::from_secs(30),
+    ) {
         Ok(c) => c,
         Err(e) => {
             return TestChannelResult {

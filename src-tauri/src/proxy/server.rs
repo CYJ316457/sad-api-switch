@@ -28,7 +28,8 @@ pub struct ProxyState {
     pub circuit_breakers: Arc<RwLock<HashMap<String, CircuitBreaker>>>,
     pub failure_counts: Arc<RwLock<HashMap<String, u32>>>, // Entry ID -> consecutive failure count
     pub app_handle: Option<tauri::AppHandle>,
-    pub http_client: reqwest::Client,
+    pub http_client_direct: reqwest::Client,
+    pub http_client_system_proxy: reqwest::Client,
     pub response_store: Arc<RwLock<HashMap<String, serde_json::Value>>>,
 }
 
@@ -64,12 +65,18 @@ impl ProxyServer {
             circuit_breakers: Arc::new(RwLock::new(HashMap::new())),
             failure_counts,
             app_handle,
-            http_client: reqwest::Client::builder()
+            http_client_direct: crate::http_client::channel_client_builder(false)
                 .connect_timeout(Duration::from_secs(connect_timeout_secs))
                 .read_timeout(Duration::from_secs(120))
                 .gzip(true)
                 .build()
-                .expect("failed to build proxy HTTP client"),
+                .expect("failed to build direct proxy HTTP client"),
+            http_client_system_proxy: crate::http_client::channel_client_builder(true)
+                .connect_timeout(Duration::from_secs(connect_timeout_secs))
+                .read_timeout(Duration::from_secs(120))
+                .gzip(true)
+                .build()
+                .expect("failed to build system-proxy HTTP client"),
             response_store: Arc::new(RwLock::new(HashMap::new())),
         };
 

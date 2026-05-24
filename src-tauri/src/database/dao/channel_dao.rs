@@ -13,6 +13,7 @@ pub struct Channel {
     pub available_models: Vec<ModelInfo>,
     pub selected_models: Vec<String>,
     pub enabled: bool,
+    pub use_system_proxy: bool,
     pub last_fetch_at: i64,
     pub notes: String,
     pub response_ms: String,
@@ -33,7 +34,7 @@ impl Database {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn.prepare(
             "SELECT id, name, api_type, base_url, api_key, available_models, selected_models,
-                    enabled, last_fetch_at, notes, response_ms, created_at, updated_at
+                    enabled, use_system_proxy, last_fetch_at, notes, response_ms, created_at, updated_at
              FROM channels ORDER BY created_at",
         )?;
 
@@ -42,6 +43,7 @@ impl Database {
                 let available_models_str: String = row.get(5)?;
                 let selected_models_str: String = row.get(6)?;
                 let enabled: i32 = row.get(7)?;
+                let use_system_proxy: i32 = row.get(8)?;
 
                 Ok(Channel {
                     id: row.get(0)?,
@@ -53,11 +55,12 @@ impl Database {
                         .unwrap_or_default(),
                     selected_models: serde_json::from_str(&selected_models_str).unwrap_or_default(),
                     enabled: enabled != 0,
-                    last_fetch_at: row.get(8)?,
-                    notes: row.get(9)?,
-                    response_ms: row.get(10)?,
-                    created_at: row.get(11)?,
-                    updated_at: row.get(12)?,
+                    use_system_proxy: use_system_proxy != 0,
+                    last_fetch_at: row.get(9)?,
+                    notes: row.get(10)?,
+                    response_ms: row.get(11)?,
+                    created_at: row.get(12)?,
+                    updated_at: row.get(13)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()
@@ -84,7 +87,7 @@ impl Database {
 
         let mut stmt = conn.prepare(
             "SELECT id, name, api_type, base_url, api_key, available_models, selected_models,
-                    enabled, last_fetch_at, notes, response_ms, created_at, updated_at
+                    enabled, use_system_proxy, last_fetch_at, notes, response_ms, created_at, updated_at
              FROM channels ORDER BY created_at LIMIT ?1 OFFSET ?2",
         )?;
 
@@ -93,6 +96,7 @@ impl Database {
                 let available_models_str: String = row.get(5)?;
                 let selected_models_str: String = row.get(6)?;
                 let enabled: i32 = row.get(7)?;
+                let use_system_proxy: i32 = row.get(8)?;
 
                 Ok(Channel {
                     id: row.get(0)?,
@@ -104,11 +108,12 @@ impl Database {
                         .unwrap_or_default(),
                     selected_models: serde_json::from_str(&selected_models_str).unwrap_or_default(),
                     enabled: enabled != 0,
-                    last_fetch_at: row.get(8)?,
-                    notes: row.get(9)?,
-                    response_ms: row.get(10)?,
-                    created_at: row.get(11)?,
-                    updated_at: row.get(12)?,
+                    use_system_proxy: use_system_proxy != 0,
+                    last_fetch_at: row.get(9)?,
+                    notes: row.get(10)?,
+                    response_ms: row.get(11)?,
+                    created_at: row.get(12)?,
+                    updated_at: row.get(13)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()
@@ -129,6 +134,7 @@ impl Database {
         api_type: &str,
         base_url: &str,
         api_key: &str,
+        use_system_proxy: bool,
         notes: Option<&str>,
     ) -> Result<Channel, AppError> {
         let conn = lock_conn!(self.conn);
@@ -138,9 +144,9 @@ impl Database {
         let now = chrono::Utc::now().timestamp();
 
         conn.execute(
-            "INSERT INTO channels (id, name, api_type, base_url, api_key, available_models, selected_models, enabled, last_fetch_at, notes, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, '[]', '[]', 1, 0, ?6, ?7, ?8)",
-            rusqlite::params![id, name, api_type, base_url, api_key, notes.unwrap_or(""), now, now],
+            "INSERT INTO channels (id, name, api_type, base_url, api_key, available_models, selected_models, enabled, use_system_proxy, last_fetch_at, notes, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, '[]', '[]', 1, ?6, 0, ?7, ?8, ?9)",
+            rusqlite::params![id, name, api_type, base_url, api_key, use_system_proxy as i32, notes.unwrap_or(""), now, now],
         )?;
 
         Ok(Channel {
@@ -152,6 +158,7 @@ impl Database {
             available_models: vec![],
             selected_models: vec![],
             enabled: true,
+            use_system_proxy,
             last_fetch_at: 0,
             notes: notes.unwrap_or("").to_string(),
             response_ms: String::new(),
@@ -168,6 +175,7 @@ impl Database {
         base_url: Option<&str>,
         api_key: Option<&str>,
         enabled: Option<bool>,
+        use_system_proxy: Option<bool>,
         notes: Option<&str>,
     ) -> Result<(), AppError> {
         let conn = lock_conn!(self.conn);
@@ -176,13 +184,14 @@ impl Database {
         let current: Channel = {
             let mut stmt = conn.prepare(
                 "SELECT id, name, api_type, base_url, api_key, available_models, selected_models,
-                        enabled, last_fetch_at, notes, response_ms, created_at, updated_at
+                        enabled, use_system_proxy, last_fetch_at, notes, response_ms, created_at, updated_at
                  FROM channels WHERE id = ?1",
             )?;
             stmt.query_row([id], |row| {
                 let available_models_str: String = row.get(5)?;
                 let selected_models_str: String = row.get(6)?;
                 let enabled: i32 = row.get(7)?;
+                let use_system_proxy: i32 = row.get(8)?;
                 Ok(Channel {
                     id: row.get(0)?,
                     name: row.get(1)?,
@@ -193,11 +202,12 @@ impl Database {
                         .unwrap_or_default(),
                     selected_models: serde_json::from_str(&selected_models_str).unwrap_or_default(),
                     enabled: enabled != 0,
-                    last_fetch_at: row.get(8)?,
-                    notes: row.get(9)?,
-                    response_ms: row.get(10)?,
-                    created_at: row.get(11)?,
-                    updated_at: row.get(12)?,
+                    use_system_proxy: use_system_proxy != 0,
+                    last_fetch_at: row.get(9)?,
+                    notes: row.get(10)?,
+                    response_ms: row.get(11)?,
+                    created_at: row.get(12)?,
+                    updated_at: row.get(13)?,
                 })
             })
             .map_err(|e| AppError::NotFound(format!("Channel {id}: {e}")))?
@@ -208,17 +218,19 @@ impl Database {
         let base_url = base_url.unwrap_or(&current.base_url);
         let api_key = api_key.unwrap_or(&current.api_key);
         let enabled_val = enabled.unwrap_or(current.enabled) as i32;
+        let use_system_proxy_val = use_system_proxy.unwrap_or(current.use_system_proxy) as i32;
         let notes = notes.unwrap_or(&current.notes);
 
         conn.execute(
-            "UPDATE channels SET name=?1, api_type=?2, base_url=?3, api_key=?4, enabled=?5, notes=?6, updated_at=?7
-             WHERE id=?8",
+            "UPDATE channels SET name=?1, api_type=?2, base_url=?3, api_key=?4, enabled=?5, use_system_proxy=?6, notes=?7, updated_at=?8
+             WHERE id=?9",
             rusqlite::params![
                 name,
                 api_type,
                 base_url,
                 api_key,
                 enabled_val,
+                use_system_proxy_val,
                 notes,
                 now,
                 id
@@ -309,7 +321,7 @@ impl Database {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn.prepare(
             "SELECT id, name, api_type, base_url, api_key, available_models, selected_models,
-                    enabled, last_fetch_at, notes, response_ms, created_at, updated_at
+                    enabled, use_system_proxy, last_fetch_at, notes, response_ms, created_at, updated_at
              FROM channels WHERE id = ?1",
         )?;
 
@@ -317,6 +329,7 @@ impl Database {
             let available_models_str: String = row.get(5)?;
             let selected_models_str: String = row.get(6)?;
             let enabled: i32 = row.get(7)?;
+            let use_system_proxy: i32 = row.get(8)?;
 
             Ok(Channel {
                 id: row.get(0)?,
@@ -327,11 +340,12 @@ impl Database {
                 available_models: serde_json::from_str(&available_models_str).unwrap_or_default(),
                 selected_models: serde_json::from_str(&selected_models_str).unwrap_or_default(),
                 enabled: enabled != 0,
-                last_fetch_at: row.get(8)?,
-                notes: row.get(9)?,
-                response_ms: row.get(10)?,
-                created_at: row.get(11)?,
-                updated_at: row.get(12)?,
+                use_system_proxy: use_system_proxy != 0,
+                last_fetch_at: row.get(9)?,
+                notes: row.get(10)?,
+                response_ms: row.get(11)?,
+                created_at: row.get(12)?,
+                updated_at: row.get(13)?,
             })
         })
         .map_err(|e| AppError::NotFound(format!("Channel {id}: {e}")))

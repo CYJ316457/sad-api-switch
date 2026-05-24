@@ -3,6 +3,7 @@ mod commands;
 mod database;
 mod embedded_pool;
 mod error;
+mod http_client;
 mod proxy;
 mod runtime_mode;
 mod services;
@@ -88,6 +89,7 @@ pub fn run() {
                                 api_type: "custom".to_string(),
                             base_url: "https://open.bigmodel.cn/api/paas/v4".to_string(),
                             api_key: api_key.to_string(),
+                            use_system_proxy: false,
                             notes: None,
                         }) {
                             let _ = pool_service::create_entry(&db, pool_service::CreateEntryParams {

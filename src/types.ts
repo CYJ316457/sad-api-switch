@@ -17,6 +17,7 @@ export interface Channel {
   available_models: ModelInfo[];
   selected_models: string[];
   enabled: boolean;
+  use_system_proxy: boolean;
   last_fetch_at: number;
   notes: string;
   response_ms: string;
@@ -56,6 +57,7 @@ export interface CreateChannelParams {
   api_type: ApiType;
   base_url: string;
   api_key: string;
+  use_system_proxy?: boolean;
   notes?: string;
 }
 
@@ -66,6 +68,7 @@ export interface UpdateChannelParams {
   base_url?: string;
   api_key?: string;
   enabled?: boolean;
+  use_system_proxy?: boolean;
   notes?: string;
 }
 

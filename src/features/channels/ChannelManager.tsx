@@ -2,9 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner';
 import { useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Edit, Plus, RefreshCw, Save, Trash2, Power, PowerOff, XCircle, FileText, FileDown, FileUp } from 'lucide-react';
+import { Edit, Plus, RefreshCw, Save, Trash2, Power, PowerOff, XCircle, FileText, FileDown, FileUp, Network } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Switch } from '@/components/ui/switch';
 import {
   Dialog,
   DialogContent,
@@ -31,6 +32,7 @@ type ChannelFormState = {
   api_key: string;
   notes: string;
   enabled: boolean;
+  use_system_proxy: boolean;
 };
 
 const API_TYPES = [
@@ -49,6 +51,7 @@ const DEFAULT_FORM: ChannelFormState = {
   api_key: '',
   notes: '',
   enabled: true,
+  use_system_proxy: false,
 };
 
 function channelToForm(channel: Channel): ChannelFormState {
@@ -60,6 +63,7 @@ function channelToForm(channel: Channel): ChannelFormState {
     api_key: channel.api_key,
     notes: channel.notes ?? '',
     enabled: channel.enabled,
+    use_system_proxy: channel.use_system_proxy ?? false,
   };
 }
 
@@ -383,6 +387,7 @@ export const ChannelManager: React.FC = () => {
             base_url: channel.base_url,
             api_key: channel.api_key,
             enabled: channel.enabled,
+            use_system_proxy: channel.use_system_proxy ?? false,
             notes: channel.notes ?? "",
           });
         } else {
@@ -392,6 +397,7 @@ export const ChannelManager: React.FC = () => {
             api_type: channel.api_type,
             base_url: channel.base_url,
             api_key: channel.api_key,
+            use_system_proxy: channel.use_system_proxy ?? false,
             notes: channel.notes ?? "",
           });
           if (channel.enabled === false) {
@@ -493,7 +499,7 @@ export const ChannelManager: React.FC = () => {
     for (const ch of toTest) {
       setTestingChannelId(ch.id);
       try {
-        const result = await api.channels.probeUrl(ch.base_url);
+        const result = await api.channels.probeUrl(ch.base_url, ch.use_system_proxy ?? false);
         if (result.reachable) {
           const ms = String(result.latency_ms);
           await api.channels.updateResponseMs(ch.id, ms);
@@ -764,12 +770,27 @@ function ChannelRow({
     }
   };
 
+  const toggleSystemProxy = async (useSystemProxy: boolean) => {
+    setSaving(true);
+    setRowError(null);
+    try {
+      await api.channels.update({ id: channel.id, use_system_proxy: useSystemProxy });
+      await onChanged();
+    } catch (err) {
+      const msg = (err && typeof err === 'object' && 'message' in err) ? String((err as { message: unknown }).message) : String(err);
+      console.error('[toggleSystemProxy]', err);
+      toast.error(msg || '保存代理开关失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const probeUrl = async () => {
     setProbing(true);
     setProbeResult(null);
     setRowError(null);
     try {
-      const result = await api.channels.probeUrl(channel.base_url);
+      const result = await api.channels.probeUrl(channel.base_url, channel.use_system_proxy ?? false);
       setProbeResult(`${result.latency_ms}ms`);
     } catch (err) {
       setRowError(getChannelErrorMessage(err, t('channel.editor.probeFailed', '测速失败')));
@@ -823,6 +844,11 @@ function ChannelRow({
                   <FileText className="h-3 w-3 text-muted-foreground shrink-0" />
                 </span>
               )}
+              {channel.use_system_proxy && (
+                <span title="走系统代理">
+                  <Network className="h-3 w-3 text-blue-500 shrink-0" />
+                </span>
+              )}
             </div>
           </div>
         </td>
@@ -860,7 +886,20 @@ function ChannelRow({
         </td>
         <td className="px-4 py-3 whitespace-nowrap text-center">{entryCountMap?.get(channel.id) ?? 0} / {availableModels.length}</td>
         <td className="px-4 py-3">
-          <div className="flex justify-end gap-1">
+          <div className="flex items-center justify-end gap-2">
+            <div
+              className="flex items-center gap-1 rounded-md px-1.5 py-1"
+              title={channel.use_system_proxy ? '当前渠道走系统代理' : '当前渠道直连'}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <Network className={cn('h-3.5 w-3.5', channel.use_system_proxy ? 'text-blue-500' : 'text-muted-foreground')} />
+              <Switch
+                checked={channel.use_system_proxy ?? false}
+                disabled={saving}
+                onCheckedChange={(checked) => toggleSystemProxy(checked === true)}
+                className="scale-75"
+              />
+            </div>
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={(event) => { event.stopPropagation(); onEdit(); }} title={t('common.edit')}>
               <Edit className="h-4 w-4" />
             </Button>
@@ -950,7 +989,7 @@ function ChannelEditorDialog({
     setProbingUrl(true);
     const timer = setTimeout(async () => {
       try {
-        const result = await api.channels.probeUrl(form.base_url.trim());
+        const result = await api.channels.probeUrl(form.base_url.trim(), form.use_system_proxy);
         if (probeSeqRef.current === seq) {
           setUrlProbe(result as { reachable: boolean; latency_ms: number; status_code?: number; detected_type?: string; message: string });
           setEndpointVerificationMessage(result.reachable
@@ -969,7 +1008,7 @@ function ChannelEditorDialog({
       }
     }, 800);
     return () => clearTimeout(timer);
-  }, [api, form.base_url, t]);
+  }, [api, form.base_url, form.use_system_proxy, t]);
 
   const canSave = !!(form.name.trim() && form.base_url.trim() && form.api_key.trim());
 
@@ -1041,7 +1080,7 @@ function ChannelEditorDialog({
     if (!probe) {
       setProbingUrl(true);
       try {
-        probe = await api.channels.probeUrl(form.base_url.trim()) as { reachable: boolean; latency_ms: number; status_code?: number; detected_type?: string; message: string };
+        probe = await api.channels.probeUrl(form.base_url.trim(), form.use_system_proxy) as { reachable: boolean; latency_ms: number; status_code?: number; detected_type?: string; message: string };
         setUrlProbe(probe);
       } catch {
         probe = { reachable: false, status_code: undefined, latency_ms: 0, detected_type: undefined, message: t('channel.editor.probeFailedGeneric', 'Probe failed') };
@@ -1059,7 +1098,7 @@ function ChannelEditorDialog({
     setFetchingModels(true);
     setModelsValidated(false);
     try {
-      const result = await api.channels.fetchModelsDirect(form.api_type, form.base_url, form.api_key, false);
+      const result = await api.channels.fetchModelsDirect(form.api_type, form.base_url, form.api_key, false, form.use_system_proxy);
       setForm((prev) => ({
         ...prev,
         api_type: result.detected_type,
@@ -1123,6 +1162,7 @@ function ChannelEditorDialog({
           api_key: form.api_key,
           notes: form.notes,
           enabled: form.enabled,
+          use_system_proxy: form.use_system_proxy,
         };
         await api.channels.update(params);
       } else {
@@ -1132,6 +1172,7 @@ function ChannelEditorDialog({
           api_type: form.api_type,
           base_url: form.base_url,
           api_key: form.api_key,
+          use_system_proxy: form.use_system_proxy,
           notes: form.notes,
         };
         const saved = await api.channels.create(params);
@@ -1262,6 +1303,19 @@ function ChannelEditorDialog({
                 </Button>
               </div>
             </div>
+
+            <label className="flex items-start gap-3 rounded-md border border-border bg-muted/20 p-3">
+              <Checkbox
+                checked={form.use_system_proxy}
+                onCheckedChange={(checked) => setValue('use_system_proxy', checked === true)}
+              />
+              <span className="space-y-0.5">
+                <span className="block text-sm font-medium">走系统代理</span>
+                <span className="block text-xs text-muted-foreground">
+                  关闭时该渠道直连；开启后，该渠道的拉模型、测速、测试对话和正常转发会使用系统代理。
+                </span>
+              </span>
+            </label>
 
             <div className="space-y-2">
               <Label>{t('channel.editor.notes')}</Label>

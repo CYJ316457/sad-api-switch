@@ -605,8 +605,14 @@ async fn forward_single(
         mw.on_request(&mut upstream_body, &ctx);
     }
 
+    let http_client = if channel.use_system_proxy {
+        &state.http_client_system_proxy
+    } else {
+        &state.http_client_direct
+    };
+
     let mut request = adapter
-        .apply_auth(state.http_client.post(&url), &channel.api_key)
+        .apply_auth(http_client.post(&url), &channel.api_key)
         .json(&upstream_body);
 
     if is_stream {

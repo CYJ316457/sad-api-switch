@@ -22,6 +22,8 @@ pub struct CreateChannelParams {
     pub api_type: String,
     pub base_url: String,
     pub api_key: String,
+    #[serde(default)]
+    pub use_system_proxy: bool,
     pub notes: Option<String>,
 }
 
@@ -32,6 +34,7 @@ pub struct UpdateChannelParams {
     pub base_url: Option<String>,
     pub api_key: Option<String>,
     pub enabled: Option<bool>,
+    pub use_system_proxy: Option<bool>,
     pub notes: Option<String>,
 }
 
@@ -50,11 +53,15 @@ pub struct FetchModelsDirectParams {
     pub base_url: String,
     pub api_key: String,
     pub verified: Option<bool>,
+    pub use_system_proxy: Option<bool>,
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProbeUrlParams {
     pub url: String,
+    #[serde(default)]
+    pub use_system_proxy: bool,
 }
 
 #[derive(Deserialize)]
@@ -157,6 +164,7 @@ pub async fn create(
             api_type: payload.api_type,
             base_url: payload.base_url,
             api_key: payload.api_key,
+            use_system_proxy: payload.use_system_proxy,
             notes: payload.notes,
         },
     )?;
@@ -175,6 +183,7 @@ pub async fn update(
         base_url: payload.base_url,
         api_key: payload.api_key,
         enabled: payload.enabled,
+        use_system_proxy: payload.use_system_proxy,
         notes: payload.notes,
     };
     let chan = channel_service::update_channel(&state.db, None, params)?;
@@ -206,6 +215,7 @@ pub async fn fetch_models_direct(
         payload.base_url,
         payload.api_key,
         payload.verified,
+        payload.use_system_proxy,
     )
     .await?;
     Ok(Json(ensure_fetch_models_result(res)?))
@@ -215,7 +225,7 @@ pub async fn probe_url(
     State(_): State<AdminState>,
     Json(payload): Json<ProbeUrlParams>,
 ) -> Result<Json<ProbeResult>, AdminError> {
-    let res = channel_service::probe_url(payload.url).await?;
+    let res = channel_service::probe_url(payload.url, payload.use_system_proxy).await?;
     Ok(Json(ensure_probe_result(res)?))
 }
 
@@ -265,6 +275,7 @@ pub async fn test_channel(
         &channel.api_key,
         &channel.api_type,
         &model,
+        channel.use_system_proxy,
     )
     .await;
     if result.success && result.status_code == Some(200) {
@@ -281,6 +292,7 @@ pub async fn test_channel(
                 base_url: None,
                 api_key: None,
                 enabled: Some(true),
+                use_system_proxy: None,
                 notes: None,
             },
         );

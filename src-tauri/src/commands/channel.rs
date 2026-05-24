@@ -67,6 +67,8 @@ pub struct CreateChannelParams {
     pub api_type: String,
     pub base_url: String,
     pub api_key: String,
+    #[serde(default)]
+    pub use_system_proxy: bool,
     pub notes: Option<String>,
 }
 
@@ -78,6 +80,7 @@ pub struct UpdateChannelParams {
     pub base_url: Option<String>,
     pub api_key: Option<String>,
     pub enabled: Option<bool>,
+    pub use_system_proxy: Option<bool>,
     pub notes: Option<String>,
 }
 
@@ -131,6 +134,7 @@ pub async fn create_channel(
             api_type: params.api_type,
             base_url: params.base_url,
             api_key: params.api_key,
+            use_system_proxy: params.use_system_proxy,
             notes: params.notes,
         },
     )?;
@@ -155,6 +159,7 @@ pub async fn update_channel(
             base_url: params.base_url,
             api_key: params.api_key,
             enabled: params.enabled,
+            use_system_proxy: params.use_system_proxy,
             notes: params.notes,
         },
     )
@@ -170,8 +175,8 @@ pub async fn delete_channel(
 }
 
 #[tauri::command]
-pub async fn probe_url(url: String) -> Result<ProbeResult, AppError> {
-    channel_service::probe_url(url).await
+pub async fn probe_url(url: String, use_system_proxy: Option<bool>) -> Result<ProbeResult, AppError> {
+    channel_service::probe_url(url, use_system_proxy.unwrap_or(false)).await
 }
 
 #[tauri::command]
@@ -194,6 +199,7 @@ pub async fn test_channel(
         &channel.api_key,
         &channel.api_type,
         &model,
+        channel.use_system_proxy,
     )
     .await;
 
@@ -212,6 +218,7 @@ pub async fn test_channel(
                 base_url: None,
                 api_key: None,
                 enabled: Some(true),
+                use_system_proxy: None,
                 notes: None,
             },
         );
@@ -231,8 +238,9 @@ pub async fn fetch_models_direct(
     base_url: String,
     api_key: String,
     verified: Option<bool>,
+    use_system_proxy: Option<bool>,
 ) -> Result<FetchModelsResult, AppError> {
-    channel_service::fetch_models_direct(api_type, base_url, api_key, verified).await
+    channel_service::fetch_models_direct(api_type, base_url, api_key, verified, use_system_proxy).await
 }
 
 #[tauri::command]

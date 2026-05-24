@@ -231,15 +231,15 @@ export const apiAdapter: ApiAdapter = {
         ? tauriCmd<FetchModelsResult>('fetch_models', { channelId })
         : webRequest<FetchModelsResult>('POST', `/channels/${channelId}/fetch-models`),
 
-    fetchModelsDirect: (apiType, baseUrl, apiKey, verified) =>
+    fetchModelsDirect: (apiType, baseUrl, apiKey, verified, useSystemProxy) =>
       useTauri()
-        ? tauriCmd<FetchModelsResult>('fetch_models_direct', { apiType, baseUrl, apiKey, verified })
-        : webRequest<FetchModelsResult>('POST', '/channels/fetch-models-direct', { apiType, baseUrl, apiKey, verified }),
+        ? tauriCmd<FetchModelsResult>('fetch_models_direct', { apiType, baseUrl, apiKey, verified, useSystemProxy })
+        : webRequest<FetchModelsResult>('POST', '/channels/fetch-models-direct', { apiType, baseUrl, apiKey, verified, useSystemProxy }),
 
-    probeUrl: (url) =>
+    probeUrl: (url, useSystemProxy) =>
       useTauri()
-        ? tauriCmd<ProbeResult>('probe_url', { url })
-        : webRequest<ProbeResult>('POST', '/channels/probe-url', { url }),
+        ? tauriCmd<ProbeResult>('probe_url', { url, useSystemProxy })
+        : webRequest<ProbeResult>('POST', '/channels/probe-url', { url, useSystemProxy }),
 
     selectModels: (channelId, modelNames, availableModels, catalogMeta = []) =>
       useTauri()

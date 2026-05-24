@@ -191,11 +191,10 @@ pub async fn test_entry_latency(
     });
     adapter.transform_request(&mut upstream_body, upstream_model);
 
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .danger_accept_invalid_certs(true)
-        .build()
-    {
+    let client = match crate::http_client::channel_client(
+        channel.use_system_proxy,
+        std::time::Duration::from_secs(30),
+    ) {
         Ok(client) => client,
         Err(e) => {
             let message = format!("HTTP client: {e}");
