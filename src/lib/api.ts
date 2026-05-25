@@ -141,6 +141,10 @@ export async function toggleAccessKey(id: string, enabled: boolean): Promise<voi
   return invoke("toggle_access_key", { id, enabled });
 }
 
+export async function updateAccessKeyModels(id: string, allowedModels: string[] | null): Promise<void> {
+  return invoke("update_access_key_models", { id, allowedModels });
+}
+
 // --- Usage ---
 
 export async function getUsageLogs(

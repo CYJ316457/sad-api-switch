@@ -233,6 +233,13 @@
     "copied": "已复制",
     "created": "创建时间",
     "enabled": "启用",
+    "availableModels": "可用模型",
+    "allModels": "全部模型",
+    "noModels": "未勾选模型",
+    "selectedModels": "已选 {{count}} 个模型",
+    "selectAll": "全选",
+    "clearAll": "取消勾选",
+    "noModelOptions": "模型管理里还没有模型",
     "deviceNamePlaceholder": "我的笔记本电脑",
     "validation": {
       "title": "Key 校验",
@@ -407,7 +414,14 @@
       "stop": "停止",
       "running": "运行中",
       "stopped": "已停止",
-      "address": "监听地址"
+      "address": "监听地址",
+      "localAddress": "本机地址",
+      "lanAddress": "局域网地址",
+      "lanAddressUnavailable": "未检测到局域网 IP，请用 ipconfig 查看",
+      "lanShare": "局域网共享",
+      "lanShareDesc": "允许同一局域网设备访问 API 代理；开启后会自动强制 Access Key",
+      "lanShareWarning": "局域网用户会消耗你的上游 API 额度，请只分发给可信设备。",
+      "firewallHint": "如果其他设备无法连接，请在 Windows 防火墙中手动放行当前监听端口。"
     },
     "security": {
       "title": "安全设置",

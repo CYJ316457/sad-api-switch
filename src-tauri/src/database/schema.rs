@@ -97,6 +97,7 @@ pub fn create_tables(conn: &Connection) -> Result<(), AppError> {
     ensure_api_entry_columns(conn)?;
     ensure_usage_log_columns(conn)?;
     ensure_channel_columns(conn)?;
+    ensure_access_key_columns(conn)?;
 
     // Indexes
     conn.execute(
@@ -148,6 +149,7 @@ pub fn create_tables(conn: &Connection) -> Result<(), AppError> {
     let defaults = [
         ("proxy_enabled", "1"),
         ("listen_port", "9090"),
+        ("lan_share_enabled", "0"),
         ("access_key_required", "0"),
         ("circuit_failure_threshold", "5"),
         ("proxy_connect_timeout_secs", "30"),
@@ -230,6 +232,11 @@ fn ensure_api_entry_columns(conn: &Connection) -> Result<(), AppError> {
 fn ensure_channel_columns(conn: &Connection) -> Result<(), AppError> {
     ensure_column(conn, "channels", "response_ms", "TEXT DEFAULT ''")?;
     ensure_column(conn, "channels", "use_system_proxy", "INTEGER DEFAULT 0")?;
+    Ok(())
+}
+
+fn ensure_access_key_columns(conn: &Connection) -> Result<(), AppError> {
+    ensure_column(conn, "access_keys", "allowed_models", "TEXT DEFAULT NULL")?;
     Ok(())
 }
 

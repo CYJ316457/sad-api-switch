@@ -29,6 +29,7 @@ export function SettingsPage() {
     mutationFn: adapter.settings.update,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["settings"] });
+      queryClient.invalidateQueries({ queryKey: ["proxyStatus"] });
       queryClient.invalidateQueries({ queryKey: ["pool-groups"] });
       queryClient.invalidateQueries({ queryKey: ["adminStatus"] });
     },
@@ -48,7 +49,11 @@ export function SettingsPage() {
       // Persist the remembered default group for the API Management page locally for faster UI restoration.
       localStorage.setItem("api-switch-default-group", value as string);
     }
-    updateMutation.mutate({ ...s, [key]: value });
+    const next = { ...s, [key]: value };
+    if (key === "lan_share_enabled" && value === true) {
+      next.access_key_required = true;
+    }
+    updateMutation.mutate(next);
   };
 
   const toggleProxy = async (enabled: boolean) => {

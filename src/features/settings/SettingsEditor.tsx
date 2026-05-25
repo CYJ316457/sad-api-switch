@@ -57,6 +57,10 @@ export function SettingsEditor({
     }
   }, [s.web_admin_password]);
 
+  const proxyPort = proxyStatus?.port ?? s.listen_port;
+  const localProxyUrl = `http://127.0.0.1:${proxyPort}/v1`;
+  const lanProxyUrl = proxyStatus?.lanAddress ?? null;
+
   return (
     <div className="space-y-6">
       <Card>
@@ -91,9 +95,30 @@ export function SettingsEditor({
               }}
             />
           </div>
+          <div className="flex items-center justify-between">
+            <div>
+              <Label>{t("settings.proxy.lanShare")}</Label>
+              <p className="text-xs text-muted-foreground">{t("settings.proxy.lanShareDesc")}</p>
+            </div>
+            <Switch
+              checked={s.lan_share_enabled}
+              onCheckedChange={(value) => {
+                onChange("lan_share_enabled", value);
+              }}
+            />
+          </div>
           {(proxyStatus?.running ?? s.proxy_enabled) && (
-            <div className="text-sm text-muted-foreground">
-              {t("settings.proxy.address")}: http://127.0.0.1:{proxyStatus?.port ?? s.listen_port}
+            <div className="space-y-1 rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+              <div>{t("settings.proxy.localAddress")}: {localProxyUrl}</div>
+              {s.lan_share_enabled && (
+                <>
+                  <div>
+                    {t("settings.proxy.lanAddress")}: {lanProxyUrl ?? t("settings.proxy.lanAddressUnavailable")}
+                  </div>
+                  <div className="text-xs text-amber-600">{t("settings.proxy.lanShareWarning")}</div>
+                  <div className="text-xs">{t("settings.proxy.firewallHint")}</div>
+                </>
+              )}
             </div>
           )}
         </CardContent>

@@ -421,6 +421,11 @@ export const apiAdapter: ApiAdapter = {
       useTauri()
         ? tauriCmd<void>('toggle_access_key', { id, enabled })
         : webRequest<void>('PUT', `/tokens/${id}/toggle`, enabled),
+
+    updateModels: (id, allowedModels) =>
+      useTauri()
+        ? tauriCmd<void>('update_access_key_models', { id, allowedModels })
+        : webRequest<void>('PUT', `/tokens/${id}/models`, { allowed_models: allowedModels }),
   },
 
   settings: {

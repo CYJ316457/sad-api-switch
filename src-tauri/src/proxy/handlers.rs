@@ -39,6 +39,56 @@ fn normalize_requested_model(model: Option<&str>) -> String {
     }
 }
 
+pub(crate) async fn extract_proxy_access_key(
+    headers: &axum::http::HeaderMap,
+    state: &ProxyState,
+) -> Result<Option<crate::database::AccessKey>, ProxyError> {
+    auth::extract_access_key(headers, state)
+        .await
+        .map_err(|err| match err {
+            crate::error::AppError::Validation(_) => ProxyError::Unauthorized,
+            other => ProxyError::from(other),
+        })
+}
+
+pub(crate) fn filter_entries_for_access_key(
+    entries: Vec<crate::database::ApiEntry>,
+    access_key: Option<&crate::database::AccessKey>,
+) -> Vec<crate::database::ApiEntry> {
+    if access_key
+        .and_then(|key| key.allowed_models.as_ref())
+        .is_none()
+    {
+        return entries;
+    }
+
+    entries
+        .into_iter()
+        .filter(|entry| access_key.is_some_and(|key| key.allows_model(&entry.model)))
+        .collect()
+}
+
+pub(crate) fn ensure_model_allowed(
+    access_key: Option<&crate::database::AccessKey>,
+    requested_model: &str,
+) -> Result<(), ProxyError> {
+    if requested_model.eq_ignore_ascii_case("auto") {
+        return Ok(());
+    }
+    if let Some(key) = access_key {
+        if !key.allows_model(requested_model) {
+            return Err(ProxyError::ForbiddenModel(requested_model.to_string()));
+        }
+    }
+    Ok(())
+}
+
+fn access_key_restricts_models(access_key: Option<&crate::database::AccessKey>) -> bool {
+    access_key
+        .and_then(|key| key.allowed_models.as_ref())
+        .is_some()
+}
+
 async fn load_sorted_entries(
     state: &ProxyState,
 ) -> Result<Vec<crate::database::ApiEntry>, ProxyError> {
@@ -213,13 +263,7 @@ pub async fn handle_chat_completions(
     let (parts, body) = request.into_parts();
     let headers = &parts.headers;
 
-    // Extract Access Key
-    let access_key = auth::extract_access_key(headers, &state)
-        .await
-        .map_err(|err| match err {
-            crate::error::AppError::Validation(_) => ProxyError::Unauthorized,
-            other => ProxyError::from(other),
-        })?;
+    let access_key = extract_proxy_access_key(headers, &state).await?;
 
     // Read request body
     let body_bytes = axum::body::to_bytes(body, 32 * 1024 * 1024)
@@ -230,6 +274,7 @@ pub async fn handle_chat_completions(
         .map_err(|e| ProxyError::Internal(format!("Failed to parse JSON: {e}")))?;
 
     let requested_model = normalize_requested_model(body.get("model").and_then(|m| m.as_str()));
+    ensure_model_allowed(access_key.as_ref(), &requested_model)?;
 
     let is_stream = body
         .get("stream")
@@ -239,8 +284,14 @@ pub async fn handle_chat_completions(
     // Resolve target entries
     // - AUTO: only enabled entries enter the auto pool
     // - named routes: resolution is based on group/model matching before AUTO fallback
-    let all_entries = state.db.get_entries_for_routing()?;
-    let auto_entries = state.db.get_enabled_entries_for_auto()?;
+    let all_entries = filter_entries_for_access_key(
+        state.db.get_entries_for_routing()?,
+        access_key.as_ref(),
+    );
+    let auto_entries = filter_entries_for_access_key(
+        state.db.get_enabled_entries_for_auto()?,
+        access_key.as_ref(),
+    );
     let sort_mode = state.settings.read().await.default_sort_mode.clone();
     let resolved = router::resolve(
         &requested_model,
@@ -286,13 +337,7 @@ pub async fn handle_messages(
     let (parts, body) = request.into_parts();
     let headers = &parts.headers;
 
-    // Extract Access Key (same as OpenAI)
-    let access_key = auth::extract_access_key(headers, &state)
-        .await
-        .map_err(|err| match err {
-            crate::error::AppError::Validation(_) => ProxyError::Unauthorized,
-            other => ProxyError::from(other),
-        })?;
+    let access_key = extract_proxy_access_key(headers, &state).await?;
 
     // Read request body
     let body_bytes = axum::body::to_bytes(body, 32 * 1024 * 1024)
@@ -307,6 +352,7 @@ pub async fn handle_messages(
 
     let requested_model =
         normalize_requested_model(openai_body.get("model").and_then(|m| m.as_str()));
+    ensure_model_allowed(access_key.as_ref(), &requested_model)?;
 
     let is_stream = openai_body
         .get("stream")
@@ -314,8 +360,14 @@ pub async fn handle_messages(
         .unwrap_or(false);
 
     // Resolve target entries (same logic as chat completions)
-    let all_entries = state.db.get_entries_for_routing()?;
-    let auto_entries = state.db.get_enabled_entries_for_auto()?;
+    let all_entries = filter_entries_for_access_key(
+        state.db.get_entries_for_routing()?,
+        access_key.as_ref(),
+    );
+    let auto_entries = filter_entries_for_access_key(
+        state.db.get_enabled_entries_for_auto()?,
+        access_key.as_ref(),
+    );
     let sort_mode = state.settings.read().await.default_sort_mode.clone();
     let resolved = router::resolve(
         &requested_model,
@@ -371,31 +423,39 @@ pub async fn handle_messages(
 /// disabled only means "skip in AUTO", the model is still usable when requested by name.
 pub async fn handle_list_models(
     State(state): State<ProxyState>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<Value>, ProxyError> {
-    let entries = dedup_models_by_name(load_sorted_entries(&state).await?);
+    let access_key = extract_proxy_access_key(&headers, &state).await?;
+    let entries = dedup_models_by_name(filter_entries_for_access_key(
+        load_sorted_entries(&state).await?,
+        access_key.as_ref(),
+    ));
 
-    let mut group_set: HashSet<String> = HashSet::new();
-    for e in &entries {
-        if let Some(name) = &e.group_name {
-            if !name.is_empty() {
-                group_set.insert(name.clone());
+    let mut group_models: Vec<Value> = Vec::new();
+    if !access_key_restricts_models(access_key.as_ref()) {
+        let mut group_set: HashSet<String> = HashSet::new();
+        for e in &entries {
+            if let Some(name) = &e.group_name {
+                if !name.is_empty() {
+                    group_set.insert(name.clone());
+                }
             }
         }
-    }
-    let mut group_names: Vec<String> = group_set.into_iter().collect();
-    group_names.sort();
+        let mut group_names: Vec<String> = group_set.into_iter().collect();
+        group_names.sort();
 
-    let group_models: Vec<Value> = group_names
-        .iter()
-        .map(|g| {
-            json!({
-                "id": g,
-                "object": "model",
-                "created": group_created_at(&entries, g),
-                "owned_by": "group",
+        group_models = group_names
+            .iter()
+            .map(|g| {
+                json!({
+                    "id": g,
+                    "object": "model",
+                    "created": group_created_at(&entries, g),
+                    "owned_by": "group",
+                })
             })
-        })
-        .collect();
+            .collect();
+    }
 
     let models: Vec<Value> = entries.iter().map(openai_model_item).collect();
 
@@ -411,8 +471,13 @@ pub async fn handle_list_models(
 /// Handle /anthropic/v1/models - Anthropic native model list format.
 pub async fn handle_list_models_claude(
     State(state): State<ProxyState>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<Value>, ProxyError> {
-    let entries = dedup_models_by_name(load_sorted_entries(&state).await?);
+    let access_key = extract_proxy_access_key(&headers, &state).await?;
+    let entries = dedup_models_by_name(filter_entries_for_access_key(
+        load_sorted_entries(&state).await?,
+        access_key.as_ref(),
+    ));
     let data: Vec<Value> = entries.iter().map(claude_model_item).collect();
 
     let first_id = data
@@ -437,8 +502,13 @@ pub async fn handle_list_models_claude(
 /// Handle /v1beta/models - Gemini native model list format.
 pub async fn handle_list_models_gemini(
     State(state): State<ProxyState>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<Value>, ProxyError> {
-    let entries = dedup_models_by_name(load_sorted_entries(&state).await?);
+    let access_key = extract_proxy_access_key(&headers, &state).await?;
+    let entries = dedup_models_by_name(filter_entries_for_access_key(
+        load_sorted_entries(&state).await?,
+        access_key.as_ref(),
+    ));
     let models: Vec<Value> = entries.iter().map(gemini_model_item).collect();
 
     Ok(Json(json!({
@@ -450,8 +520,13 @@ pub async fn handle_list_models_gemini(
 pub async fn handle_list_models_azure(
     State(state): State<ProxyState>,
     Query(_query): Query<super::server::AzureDeploymentsQuery>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<Value>, ProxyError> {
-    let entries = dedup_models_by_name(load_sorted_entries(&state).await?);
+    let access_key = extract_proxy_access_key(&headers, &state).await?;
+    let entries = dedup_models_by_name(filter_entries_for_access_key(
+        load_sorted_entries(&state).await?,
+        access_key.as_ref(),
+    ));
     let data: Vec<Value> = entries.iter().map(azure_deployment_item).collect();
 
     Ok(Json(json!({
@@ -492,6 +567,8 @@ async fn handle_gemini_generate_content(
     let (parts, body) = request.into_parts();
     let headers = &parts.headers;
 
+    let access_key = extract_proxy_access_key(headers, &state).await?;
+
     let body_bytes = axum::body::to_bytes(body, 32 * 1024 * 1024)
         .await
         .map_err(|e| ProxyError::Internal(format!("Failed to read body: {e}")))?;
@@ -504,9 +581,16 @@ async fn handle_gemini_generate_content(
     openai_body["model"] = json!(model);
 
     let requested_model = normalize_requested_model(Some(model));
+    ensure_model_allowed(access_key.as_ref(), &requested_model)?;
 
-    let all_entries = state.db.get_entries_for_routing()?;
-    let auto_entries = state.db.get_enabled_entries_for_auto()?;
+    let all_entries = filter_entries_for_access_key(
+        state.db.get_entries_for_routing()?,
+        access_key.as_ref(),
+    );
+    let auto_entries = filter_entries_for_access_key(
+        state.db.get_enabled_entries_for_auto()?,
+        access_key.as_ref(),
+    );
     let sort_mode = state.settings.read().await.default_sort_mode.clone();
     let resolved = router::resolve(
         &requested_model,
@@ -531,7 +615,7 @@ async fn handle_gemini_generate_content(
         &openai_body,
         headers,
         &requested_model,
-        None,
+        access_key.as_ref(),
         false,
         &middleware,
         caller_kind,
@@ -565,6 +649,8 @@ async fn handle_gemini_stream_generate_content(
     let (parts, body) = request.into_parts();
     let headers = &parts.headers;
 
+    let access_key = extract_proxy_access_key(headers, &state).await?;
+
     let body_bytes = axum::body::to_bytes(body, 32 * 1024 * 1024)
         .await
         .map_err(|e| ProxyError::Internal(format!("Failed to read body: {e}")))?;
@@ -578,9 +664,16 @@ async fn handle_gemini_stream_generate_content(
     openai_body["stream"] = json!(true);
 
     let requested_model = normalize_requested_model(Some(model));
+    ensure_model_allowed(access_key.as_ref(), &requested_model)?;
 
-    let all_entries = state.db.get_entries_for_routing()?;
-    let auto_entries = state.db.get_enabled_entries_for_auto()?;
+    let all_entries = filter_entries_for_access_key(
+        state.db.get_entries_for_routing()?,
+        access_key.as_ref(),
+    );
+    let auto_entries = filter_entries_for_access_key(
+        state.db.get_enabled_entries_for_auto()?,
+        access_key.as_ref(),
+    );
     let sort_mode = state.settings.read().await.default_sort_mode.clone();
     let resolved = router::resolve(
         &requested_model,
@@ -605,7 +698,7 @@ async fn handle_gemini_stream_generate_content(
         &openai_body,
         headers,
         &requested_model,
-        None,
+        access_key.as_ref(),
         true, // is_stream = true
         &middleware,
         caller_kind,
@@ -620,10 +713,14 @@ async fn handle_gemini_stream_generate_content(
 pub async fn handle_gemini_model_detail(
     State(state): State<ProxyState>,
     Path(model): Path<String>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<Value>, ProxyError> {
     // 从 DB 查找该模型
     let entries = state.db.get_entries_for_routing()?;
     let model_lower = model.to_ascii_lowercase();
+    let access_key = extract_proxy_access_key(&headers, &state).await?;
+    ensure_model_allowed(access_key.as_ref(), &model)?;
+    let entries = filter_entries_for_access_key(entries, access_key.as_ref());
 
     if let Some(entry) = entries.iter().find(|e| e.model.to_ascii_lowercase() == model_lower) {
         return Ok(Json(gemini_single_model_item(entry)));
@@ -647,12 +744,7 @@ pub async fn handle_azure_chat(
     let (parts, body) = request.into_parts();
     let headers = &parts.headers;
 
-    let access_key = auth::extract_access_key(headers, &state)
-        .await
-        .map_err(|err| match err {
-            crate::error::AppError::Validation(_) => ProxyError::Unauthorized,
-            other => ProxyError::from(other),
-        })?;
+    let access_key = extract_proxy_access_key(headers, &state).await?;
 
     let body_bytes = axum::body::to_bytes(body, 32 * 1024 * 1024)
         .await
@@ -665,14 +757,21 @@ pub async fn handle_azure_chat(
 
     let requested_model =
         normalize_requested_model(openai_body.get("model").and_then(|m| m.as_str()));
+    ensure_model_allowed(access_key.as_ref(), &requested_model)?;
 
     let is_stream = openai_body
         .get("stream")
         .and_then(|s| s.as_bool())
         .unwrap_or(false);
 
-    let all_entries = state.db.get_entries_for_routing()?;
-    let auto_entries = state.db.get_enabled_entries_for_auto()?;
+    let all_entries = filter_entries_for_access_key(
+        state.db.get_entries_for_routing()?,
+        access_key.as_ref(),
+    );
+    let auto_entries = filter_entries_for_access_key(
+        state.db.get_enabled_entries_for_auto()?,
+        access_key.as_ref(),
+    );
     let sort_mode = state.settings.read().await.default_sort_mode.clone();
 
     let mut resolved: Vec<crate::database::ApiEntry> = {
@@ -819,6 +918,65 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].id, first.id);
     }
+
+    #[test]
+    fn restricted_access_key_filters_entries_by_downstream_model() {
+        let key = crate::database::AccessKey {
+            id: "key-1".to_string(),
+            name: "restricted".to_string(),
+            key: "sk-test".to_string(),
+            enabled: true,
+            created_at: 0,
+            allowed_models: Some(vec!["client-alias".to_string()]),
+        };
+        let mut allowed = sample_entry("1", "client-alias", "Allowed", None);
+        allowed.upstream_model = Some("provider-real-model".to_string());
+        let denied = sample_entry("2", "provider-real-model", "Denied", None);
+
+        let filtered =
+            filter_entries_for_access_key(vec![allowed.clone(), denied], Some(&key));
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].model, "client-alias");
+        assert_eq!(filtered[0].upstream_model(), "provider-real-model");
+    }
+
+    #[test]
+    fn restricted_access_key_rejects_named_model_outside_allowlist() {
+        let key = crate::database::AccessKey {
+            id: "key-1".to_string(),
+            name: "restricted".to_string(),
+            key: "sk-test".to_string(),
+            enabled: true,
+            created_at: 0,
+            allowed_models: Some(vec!["client-alias".to_string()]),
+        };
+
+        assert!(ensure_model_allowed(Some(&key), "client-alias").is_ok());
+        assert!(matches!(
+            ensure_model_allowed(Some(&key), "provider-real-model"),
+            Err(ProxyError::ForbiddenModel(model)) if model == "provider-real-model"
+        ));
+    }
+
+    #[test]
+    fn access_key_restricts_models_only_when_allowlist_is_present() {
+        let all_models_key = crate::database::AccessKey {
+            id: "key-1".to_string(),
+            name: "all".to_string(),
+            key: "sk-test".to_string(),
+            enabled: true,
+            created_at: 0,
+            allowed_models: None,
+        };
+        let restricted_key = crate::database::AccessKey {
+            allowed_models: Some(vec!["client-alias".to_string()]),
+            ..all_models_key.clone()
+        };
+
+        assert!(!access_key_restricts_models(Some(&all_models_key)));
+        assert!(access_key_restricts_models(Some(&restricted_key)));
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -829,6 +987,9 @@ pub enum ProxyError {
 
     #[error("Unauthorized")]
     Unauthorized,
+
+    #[error("Model not allowed for this access key: {0}")]
+    ForbiddenModel(String),
 
     #[error("Internal error: {0}")]
     Internal(String),
@@ -852,6 +1013,10 @@ impl IntoResponse for ProxyError {
                 format!("No available provider for model: {model}"),
             ),
             ProxyError::Unauthorized => (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()),
+            ProxyError::ForbiddenModel(model) => (
+                StatusCode::FORBIDDEN,
+                format!("Model not allowed for this access key: {model}"),
+            ),
             ProxyError::AllProvidersFailed => {
                 (StatusCode::BAD_GATEWAY, "All providers failed".to_string())
             }

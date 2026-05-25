@@ -12,3 +12,4 @@ mod sse;
 pub use server::ProxyServer;
 pub(crate) use server::ProxyState;
 pub use server::ProxyStatus;
+pub use server::{bind_address, local_lan_ipv4};

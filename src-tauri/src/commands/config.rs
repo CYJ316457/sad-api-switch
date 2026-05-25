@@ -341,7 +341,12 @@ pub async fn apply_settings_update_with_restart(
     restart_async: bool,
 ) -> Result<Option<RestartInfo>, AppError> {
     let previous_settings = state.settings.read().await.clone();
+    let mut settings = settings;
+    if settings.lan_share_enabled {
+        settings.access_key_required = true;
+    }
     let requires_proxy_restart = previous_settings.listen_port != settings.listen_port
+        || previous_settings.lan_share_enabled != settings.lan_share_enabled
         || previous_settings.web_admin_enabled != settings.web_admin_enabled
         || previous_settings.web_admin_username != settings.web_admin_username
         || previous_settings.web_admin_password != settings.web_admin_password

@@ -5,7 +5,6 @@
 //! Responses JSON objects; streaming responses are converted from upstream
 //! Chat Completions SSE to Responses-style SSE events in real time.
 
-use super::auth;
 use super::forwarder;
 use super::handlers::ProxyError;
 use super::protocol::responses::{
@@ -42,12 +41,7 @@ pub async fn handle_responses(
     let headers = &parts.headers;
 
     // 1. Auth
-    let access_key = auth::extract_access_key(headers, &state)
-        .await
-        .map_err(|err| match err {
-            crate::error::AppError::Validation(_) => ProxyError::Unauthorized,
-            other => ProxyError::from(other),
-        })?;
+    let access_key = super::handlers::extract_proxy_access_key(headers, &state).await?;
 
     // 2. Parse request body
     let body_bytes = axum::body::to_bytes(body, 32 * 1024 * 1024)
@@ -96,9 +90,16 @@ pub async fn handle_responses(
     } else {
         model.to_string()
     };
+    super::handlers::ensure_model_allowed(access_key.as_ref(), &requested_model)?;
 
-    let all_entries = state.db.get_entries_for_routing()?;
-    let auto_entries = state.db.get_enabled_entries_for_auto()?;
+    let all_entries = super::handlers::filter_entries_for_access_key(
+        state.db.get_entries_for_routing()?,
+        access_key.as_ref(),
+    );
+    let auto_entries = super::handlers::filter_entries_for_access_key(
+        state.db.get_enabled_entries_for_auto()?,
+        access_key.as_ref(),
+    );
     let sort_mode = state.settings.read().await.default_sort_mode.clone();
     let resolved = router::resolve(
         &requested_model,

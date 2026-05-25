@@ -50,3 +50,27 @@ pub fn toggle_access_key(
     crate::state_version::bump();
     Ok(())
 }
+
+pub fn update_access_key_models(
+    db: &Database,
+    id: &str,
+    allowed_models: Option<Vec<String>>,
+    app: Option<&tauri::AppHandle>,
+) -> Result<(), AppError> {
+    let normalized = allowed_models.map(|models| {
+        let mut cleaned: Vec<String> = models
+            .into_iter()
+            .map(|model| model.trim().to_string())
+            .filter(|model| !model.is_empty())
+            .collect();
+        cleaned.sort();
+        cleaned.dedup();
+        cleaned
+    });
+    db.update_access_key_models(id, normalized)?;
+    if let Some(app) = app {
+        crate::refresh_tray_if_enabled(app);
+    }
+    crate::state_version::bump();
+    Ok(())
+}

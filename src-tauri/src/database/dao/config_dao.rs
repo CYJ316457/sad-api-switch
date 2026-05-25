@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub struct AppSettings {
     pub proxy_enabled: bool,
     pub listen_port: i32,
+    pub lan_share_enabled: bool,
     pub access_key_required: bool,
     pub circuit_failure_threshold: i32,
     pub proxy_connect_timeout_secs: u64,
@@ -36,6 +37,7 @@ impl Default for AppSettings {
         Self {
             proxy_enabled: true,
             listen_port: 9090,
+            lan_share_enabled: false,
             access_key_required: false,
             circuit_failure_threshold: 5,
             proxy_connect_timeout_secs: 30,
@@ -80,6 +82,9 @@ impl Database {
         }
         if let Some(v) = kv.get("listen_port") {
             settings.listen_port = v.parse().unwrap_or(9090);
+        }
+        if let Some(v) = kv.get("lan_share_enabled") {
+            settings.lan_share_enabled = v == "1";
         }
         if let Some(v) = kv.get("access_key_required") {
             settings.access_key_required = v == "1";
@@ -158,6 +163,10 @@ impl Database {
                 if updates.proxy_enabled { "1" } else { "0" },
             ),
             ("listen_port", &updates.listen_port.to_string()),
+            (
+                "lan_share_enabled",
+                if updates.lan_share_enabled { "1" } else { "0" },
+            ),
             (
                 "access_key_required",
                 if updates.access_key_required {

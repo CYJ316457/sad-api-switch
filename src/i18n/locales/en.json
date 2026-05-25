@@ -233,6 +233,13 @@
     "copied": "Copied",
     "created": "Created",
     "enabled": "Enabled",
+    "availableModels": "Available Models",
+    "allModels": "All Models",
+    "noModels": "No Models",
+    "selectedModels": "{{count}} models selected",
+    "selectAll": "Select All",
+    "clearAll": "Clear",
+    "noModelOptions": "No models in API Management yet",
     "deviceNamePlaceholder": "My Laptop",
     "validation": {
       "title": "Key Validation",
@@ -407,7 +414,14 @@
       "stop": "Stop",
       "running": "Running",
       "stopped": "Stopped",
-      "address": "Listen Address"
+      "address": "Listen Address",
+      "localAddress": "Local Address",
+      "lanAddress": "LAN Address",
+      "lanAddressUnavailable": "No LAN IP detected. Check with ipconfig.",
+      "lanShare": "LAN Sharing",
+      "lanShareDesc": "Allow devices on the same LAN to access the API proxy. Access Key is required when enabled.",
+      "lanShareWarning": "LAN users can consume your upstream API quota. Share only with trusted devices.",
+      "firewallHint": "If other devices cannot connect, manually allow the listen port in Windows Firewall."
     },
     "security": {
       "title": "Security",

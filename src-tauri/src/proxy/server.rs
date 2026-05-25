@@ -7,10 +7,11 @@ use axum::routing::{get, post};
 use axum::Router;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{oneshot, RwLock};
+use tokio::sync::{oneshot, Mutex as AsyncMutex, RwLock};
+use tokio::task::JoinHandle;
 use tower_http::cors::{Any, CorsLayer};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,6 +19,10 @@ pub struct ProxyStatus {
     pub running: bool,
     pub address: String,
     pub port: i32,
+    #[serde(rename = "lanAddress")]
+    pub lan_address: Option<String>,
+    #[serde(rename = "lanShareEnabled")]
+    pub lan_share_enabled: bool,
 }
 
 /// Shared proxy state
@@ -42,9 +47,12 @@ pub(crate) struct AzureDeploymentsQuery {
 /// HTTP proxy server
 pub struct ProxyServer {
     port: i32,
+    bind_address: String,
+    lan_share_enabled: bool,
     connect_timeout_secs: u64,
     state: ProxyState,
     shutdown_tx: Arc<RwLock<Option<oneshot::Sender<()>>>>,
+    server_task: Arc<AsyncMutex<Option<JoinHandle<()>>>>,
 }
 
 impl ProxyServer {
@@ -59,6 +67,11 @@ impl ProxyServer {
             .try_read()
             .map(|settings| settings.proxy_connect_timeout_secs.clamp(1, 300))
             .unwrap_or(30);
+        let lan_share_enabled = settings
+            .try_read()
+            .map(|settings| settings.lan_share_enabled)
+            .unwrap_or(false);
+        let bind_address = bind_address_from_lan_share(lan_share_enabled).to_string();
         let state = ProxyState {
             db,
             settings,
@@ -82,9 +95,12 @@ impl ProxyServer {
 
         Self {
             port,
+            bind_address,
+            lan_share_enabled,
             connect_timeout_secs,
             state,
             shutdown_tx: Arc::new(RwLock::new(None)),
+            server_task: Arc::new(AsyncMutex::new(None)),
         }
     }
 
@@ -97,7 +113,7 @@ impl ProxyServer {
             return Err("Proxy already running".to_string());
         }
 
-        let addr: SocketAddr = format!("0.0.0.0:{}", self.port)
+        let addr: SocketAddr = format!("{}:{}", self.bind_address, self.port)
             .parse()
             .map_err(|e| format!("Invalid address: {e}"))?;
 
@@ -121,8 +137,8 @@ impl ProxyServer {
             .route(
                 "/openai/deployments",
                 get(
-                    |state, query: Query<AzureDeploymentsQuery>| async move {
-                        handlers::handle_list_models_azure(state, query).await
+                    |state, query: Query<AzureDeploymentsQuery>, headers| async move {
+                        handlers::handle_list_models_azure(state, query, headers).await
                     },
                 ),
             )
@@ -163,7 +179,7 @@ impl ProxyServer {
 
         *self.shutdown_tx.write().await = Some(shutdown_tx);
 
-        tokio::spawn(async move {
+        let server_task = tokio::spawn(async move {
             axum::serve(listener, app)
                 .with_graceful_shutdown(async {
                     let _ = shutdown_rx.await;
@@ -175,6 +191,7 @@ impl ProxyServer {
 
             log::info!("Proxy server stopped");
         });
+        *self.server_task.lock().await = Some(server_task);
 
         Ok(())
     }
@@ -182,6 +199,10 @@ impl ProxyServer {
     pub async fn stop(&self) -> Result<(), String> {
         if let Some(tx) = self.shutdown_tx.write().await.take() {
             let _ = tx.send(());
+            if let Some(task) = self.server_task.lock().await.take() {
+                task.await
+                    .map_err(|e| format!("Proxy server shutdown failed: {e}"))?;
+            }
             Ok(())
         } else {
             Err("Proxy not running".to_string())
@@ -197,8 +218,57 @@ impl ProxyServer {
 
         ProxyStatus {
             running,
-            address: "127.0.0.1".to_string(),
+            address: self.bind_address.clone(),
             port: self.port,
+            lan_address: local_lan_ipv4().map(|ip| format!("http://{ip}:{}/v1", self.port)),
+            lan_share_enabled: self.lan_share_enabled,
         }
+    }
+}
+
+pub fn bind_address(settings: &AppSettings) -> &'static str {
+    bind_address_from_lan_share(settings.lan_share_enabled)
+}
+
+fn bind_address_from_lan_share(enabled: bool) -> &'static str {
+    if enabled {
+        "0.0.0.0"
+    } else {
+        "127.0.0.1"
+    }
+}
+
+pub fn local_lan_ipv4() -> Option<Ipv4Addr> {
+    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    socket.connect((Ipv4Addr::new(8, 8, 8, 8), 80)).ok()?;
+    let local_addr = socket.local_addr().ok()?;
+    match local_addr.ip() {
+        std::net::IpAddr::V4(ip) if !ip.is_loopback() && !ip.is_unspecified() => Some(ip),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bind_address_defaults_to_loopback_when_lan_share_disabled() {
+        let settings = AppSettings {
+            lan_share_enabled: false,
+            ..AppSettings::default()
+        };
+
+        assert_eq!(bind_address(&settings), "127.0.0.1");
+    }
+
+    #[test]
+    fn bind_address_uses_all_interfaces_when_lan_share_enabled() {
+        let settings = AppSettings {
+            lan_share_enabled: true,
+            ..AppSettings::default()
+        };
+
+        assert_eq!(bind_address(&settings), "0.0.0.0");
     }
 }

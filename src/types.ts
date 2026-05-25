@@ -122,6 +122,7 @@ export interface AccessKey {
   key: string;
   enabled: boolean;
   created_at: number;
+  allowed_models: string[] | null;
 }
 
 // --- Usage Log ---
@@ -220,6 +221,7 @@ export interface DashboardFilter {
 export interface AppSettings {
   proxy_enabled: boolean;
   listen_port: number;
+  lan_share_enabled: boolean;
   access_key_required: boolean;
   circuit_failure_threshold: number;
   proxy_connect_timeout_secs: number;
@@ -250,6 +252,7 @@ export interface VersionedAppSettings extends AppSettings {
 export const DEFAULT_SETTINGS: VersionedAppSettings = {
   proxy_enabled: false,
   listen_port: 9090,
+  lan_share_enabled: false,
   access_key_required: false,
   circuit_failure_threshold: 5,
   proxy_connect_timeout_secs: 30,
@@ -279,6 +282,8 @@ export interface ProxyStatus {
   running: boolean;
   address: string;
   port: number;
+  lanAddress?: string | null;
+  lanShareEnabled?: boolean;
 }
 
 export interface AdminStatus {

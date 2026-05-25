@@ -10,13 +10,23 @@ pub struct AccessKey {
     pub key: String,
     pub enabled: bool,
     pub created_at: i64,
+    pub allowed_models: Option<Vec<String>>,
+}
+
+impl AccessKey {
+    pub fn allows_model(&self, model: &str) -> bool {
+        match &self.allowed_models {
+            None => true,
+            Some(models) => models.iter().any(|allowed| allowed == model),
+        }
+    }
 }
 
 impl Database {
     pub fn list_access_keys(&self) -> Result<Vec<AccessKey>, AppError> {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn.prepare(
-            "SELECT id, name, key, enabled, created_at FROM access_keys ORDER BY created_at",
+            "SELECT id, name, key, enabled, created_at, allowed_models FROM access_keys ORDER BY created_at",
         )?;
 
         let keys = stmt
@@ -28,6 +38,7 @@ impl Database {
                     key: row.get(2)?,
                     enabled: enabled != 0,
                     created_at: row.get(4)?,
+                    allowed_models: parse_allowed_models(row.get(5)?)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()
@@ -53,7 +64,7 @@ impl Database {
         )?;
 
         let mut stmt = conn.prepare(
-            "SELECT id, name, key, enabled, created_at FROM access_keys ORDER BY created_at LIMIT ?1 OFFSET ?2",
+            "SELECT id, name, key, enabled, created_at, allowed_models FROM access_keys ORDER BY created_at LIMIT ?1 OFFSET ?2",
         )?;
 
         let keys = stmt
@@ -65,6 +76,7 @@ impl Database {
                     key: row.get(2)?,
                     enabled: enabled != 0,
                     created_at: row.get(4)?,
+                    allowed_models: parse_allowed_models(row.get(5)?)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()
@@ -95,6 +107,7 @@ impl Database {
             key,
             enabled: true,
             created_at: now,
+            allowed_models: None,
         })
     }
 
@@ -113,10 +126,24 @@ impl Database {
         Ok(())
     }
 
+    pub fn update_access_key_models(
+        &self,
+        id: &str,
+        allowed_models: Option<Vec<String>>,
+    ) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+        let allowed_models_json = serialize_allowed_models(&allowed_models)?;
+        conn.execute(
+            "UPDATE access_keys SET allowed_models = ?1 WHERE id = ?2",
+            rusqlite::params![allowed_models_json, id],
+        )?;
+        Ok(())
+    }
+
     pub fn find_access_key_by_key(&self, key: &str) -> Result<Option<AccessKey>, AppError> {
         let conn = lock_conn!(self.conn);
         let result = conn.query_row(
-            "SELECT id, name, key, enabled, created_at FROM access_keys WHERE key = ?1",
+            "SELECT id, name, key, enabled, created_at, allowed_models FROM access_keys WHERE key = ?1",
             [key],
             |row| {
                 let enabled: i32 = row.get(3)?;
@@ -126,6 +153,7 @@ impl Database {
                     key: row.get(2)?,
                     enabled: enabled != 0,
                     created_at: row.get(4)?,
+                    allowed_models: parse_allowed_models(row.get(5)?)?,
                 })
             },
         );
@@ -135,5 +163,71 @@ impl Database {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(AppError::Database(e.to_string())),
         }
+    }
+}
+
+fn parse_allowed_models(value: Option<String>) -> rusqlite::Result<Option<Vec<String>>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.trim().is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_str::<Vec<String>>(&value)
+        .map(Some)
+        .map_err(|err| rusqlite::Error::FromSqlConversionFailure(
+            0,
+            rusqlite::types::Type::Text,
+            Box::new(err),
+        ))
+}
+
+fn serialize_allowed_models(value: &Option<Vec<String>>) -> Result<Option<String>, AppError> {
+    value
+        .as_ref()
+        .map(|models| {
+            serde_json::to_string(models).map_err(|err| AppError::Database(err.to_string()))
+        })
+        .transpose()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AccessKey;
+
+    fn key_with_models(allowed_models: Option<Vec<&str>>) -> AccessKey {
+        AccessKey {
+            id: "key-1".to_string(),
+            name: "test".to_string(),
+            key: "sk-test".to_string(),
+            enabled: true,
+            created_at: 0,
+            allowed_models: allowed_models
+                .map(|models| models.into_iter().map(str::to_string).collect()),
+        }
+    }
+
+    #[test]
+    fn none_allowed_models_means_all_models() {
+        let key = key_with_models(None);
+
+        assert!(key.allows_model("gpt-4o"));
+        assert!(key.allows_model("client-alias"));
+    }
+
+    #[test]
+    fn empty_allowed_models_means_no_models() {
+        let key = key_with_models(Some(vec![]));
+
+        assert!(!key.allows_model("gpt-4o"));
+    }
+
+    #[test]
+    fn allowed_models_match_downstream_model_exactly() {
+        let key = key_with_models(Some(vec!["client-alias"]));
+
+        assert!(key.allows_model("client-alias"));
+        assert!(!key.allows_model("provider-real-model"));
+        assert!(!key.allows_model("CLIENT-ALIAS"));
     }
 }

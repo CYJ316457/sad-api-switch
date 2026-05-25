@@ -41,6 +41,7 @@ export interface ApiAdapter {
     create(name: string): Promise<AccessKey>;
     delete(id: string): Promise<void>;
     toggle(id: string, enabled: boolean): Promise<void>;
+    updateModels(id: string, allowedModels: string[] | null): Promise<void>;
   };
 settings: {
     get(): Promise<AppSettings>;

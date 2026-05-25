@@ -92,6 +92,10 @@ pub fn build_admin_router(state: AdminState) -> Router {
             "/admin/tokens/:id/toggle",
             put(token_handlers::toggle_token),
         )
+        .route(
+            "/admin/tokens/:id/models",
+            put(token_handlers::update_token_models),
+        )
         // Usage/Dashboard API routes – all require auth
         .route("/admin/logs", get(usage_handlers::get_logs))
         .route(

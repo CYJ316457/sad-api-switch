@@ -42,3 +42,13 @@ pub async fn toggle_access_key(
 ) -> Result<(), AppError> {
     token_service::toggle_access_key(&state.db, &id, enabled, Some(&app))
 }
+
+#[tauri::command]
+pub async fn update_access_key_models(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    allowed_models: Option<Vec<String>>,
+) -> Result<(), AppError> {
+    token_service::update_access_key_models(&state.db, &id, allowed_models, Some(&app))
+}

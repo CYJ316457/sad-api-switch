@@ -11,6 +11,11 @@ use serde::Serialize;
 pub struct ProxyStatusResponse {
     pub running: bool,
     pub port: i32,
+    pub address: String,
+    #[serde(rename = "lanAddress")]
+    pub lan_address: Option<String>,
+    #[serde(rename = "lanShareEnabled")]
+    pub lan_share_enabled: bool,
 }
 
 /// Get the current proxy status.
@@ -31,14 +36,20 @@ pub async fn get_status(
         Some(server) => server.get_status(),
         None => ProxyStatus {
             running: false,
-            address: "127.0.0.1".to_string(),
+            address: crate::proxy::bind_address(&settings).to_string(),
             port: settings.listen_port,
+            lan_address: crate::proxy::local_lan_ipv4()
+                .map(|ip| format!("http://{ip}:{}/v1", settings.listen_port)),
+            lan_share_enabled: settings.lan_share_enabled,
         },
     };
 
     Ok(Json(ProxyStatusResponse {
         running: status.running,
         port: status.port,
+        address: status.address,
+        lan_address: status.lan_address,
+        lan_share_enabled: status.lan_share_enabled,
     }))
 }
 
@@ -103,6 +114,9 @@ Some(app_handle.clone()),
     Ok(Json(ProxyStatusResponse {
         running: true,
         port,
+        address: crate::proxy::bind_address(&settings).to_string(),
+        lan_address: crate::proxy::local_lan_ipv4().map(|ip| format!("http://{ip}:{port}/v1")),
+        lan_share_enabled: settings.lan_share_enabled,
     }))
 }
 
@@ -139,5 +153,11 @@ pub async fn stop(
         .await
         .map_err(|e| AdminError::Internal(e.to_string()))?;
 
-    Ok(Json(ProxyStatusResponse { running, port }))
+    Ok(Json(ProxyStatusResponse {
+        running,
+        port,
+        address: crate::proxy::bind_address(&settings).to_string(),
+        lan_address: crate::proxy::local_lan_ipv4().map(|ip| format!("http://{ip}:{port}/v1")),
+        lan_share_enabled: settings.lan_share_enabled,
+    }))
 }

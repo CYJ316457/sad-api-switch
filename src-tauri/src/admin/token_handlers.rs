@@ -62,3 +62,22 @@ pub async fn toggle_token(
     token_service::toggle_access_key(&state.db, &id, enabled, state.app_handle.as_ref())?;
     Ok(Json(serde_json::json!({"ok": true})))
 }
+
+#[derive(Deserialize)]
+pub struct UpdateTokenModelsParams {
+    pub allowed_models: Option<Vec<String>>,
+}
+
+pub async fn update_token_models(
+    State(state): State<AdminState>,
+    Path(id): Path<String>,
+    Json(payload): Json<UpdateTokenModelsParams>,
+) -> Result<Json<serde_json::Value>, AdminError> {
+    token_service::update_access_key_models(
+        &state.db,
+        &id,
+        payload.allowed_models,
+        state.app_handle.as_ref(),
+    )?;
+    Ok(Json(serde_json::json!({"ok": true})))
+}

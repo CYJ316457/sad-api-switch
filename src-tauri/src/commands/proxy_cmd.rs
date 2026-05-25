@@ -41,8 +41,10 @@ pub async fn start_proxy(
 
     let status = ProxyStatus {
         running: true,
-        address: "127.0.0.1".to_string(),
+        address: crate::proxy::bind_address(&settings).to_string(),
         port,
+        lan_address: crate::proxy::local_lan_ipv4().map(|ip| format!("http://{ip}:{port}/v1")),
+        lan_share_enabled: settings.lan_share_enabled,
     };
 
     *proxy_guard = Some(server);
@@ -77,8 +79,11 @@ pub async fn get_proxy_status(state: State<'_, AppState>) -> Result<ProxyStatus,
         Some(server) => server.get_status(),
         None => ProxyStatus {
             running: false,
-            address: "127.0.0.1".to_string(),
+            address: crate::proxy::bind_address(&settings).to_string(),
             port: settings.listen_port,
+            lan_address: crate::proxy::local_lan_ipv4()
+                .map(|ip| format!("http://{ip}:{}/v1", settings.listen_port)),
+            lan_share_enabled: settings.lan_share_enabled,
         },
     })
 }
