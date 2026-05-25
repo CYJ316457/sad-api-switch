@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner';
 import { useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Edit, Plus, RefreshCw, Save, Trash2, Power, PowerOff, XCircle, FileText, FileDown, FileUp, Network } from 'lucide-react';
+import { Edit, Plus, RefreshCw, Save, Trash2, XCircle, FileText, Upload, Download, Network } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Switch } from '@/components/ui/switch';
@@ -540,11 +540,11 @@ export const ChannelManager: React.FC = () => {
               }}
             />
             <Button size="sm" variant="outline" className="gap-1.5" onClick={() => importInputRef.current?.click()} disabled={importing}>
-              <FileUp className="h-4 w-4" />
+              <Upload className="h-4 w-4" />
               {importing ? "导入中..." : "一键导入"}
             </Button>
             <Button size="sm" variant="outline" className="gap-1.5" onClick={handleExportChannels}>
-              <FileDown className="h-4 w-4" />
+              <Download className="h-4 w-4" />
               一键导出
             </Button>
             <Button size="sm" className="gap-1.5" onClick={openCreate}>
@@ -562,17 +562,18 @@ export const ChannelManager: React.FC = () => {
               <col className="w-[20%]" />
               <col className="w-24" />
               <col />
-              <col className="w-24" />
-              <col className="w-24" />
+              <col className="w-20" />
+              <col className="w-20" />
               <col className="w-24" />
               <col className="w-32" />
+              <col className="w-24" />
             </colgroup>
             <thead className="bg-muted/50">
               <tr className="border-b border-border">
                 <th className="px-4 py-3 text-left font-medium">{t('channel.name')}</th>
                 <th className="px-4 py-3 text-left font-medium">{t('channel.type')}</th>
                 <th className="px-4 py-3 text-left font-medium">{t('channel.baseUrl')}</th>
-                <th className="px-4 py-3 text-left font-medium">{t('channel.status')}</th>
+                <th className="px-2 py-3 text-center font-medium">{t('channel.proxy')}</th>
                 <th className="px-4 py-3 text-left font-medium whitespace-nowrap">
                   <div className="flex items-center gap-1">
                     <span>{t('channel.responseTime')}</span>
@@ -588,6 +589,7 @@ export const ChannelManager: React.FC = () => {
                   </div>
                 </th>
                 <th className="px-4 py-3 text-center font-medium">{t('channel.modelCount')}</th>
+                <th className="px-2 py-3 text-center font-medium">{t('channel.status')}</th>
                 <th className="px-4 py-3 text-right font-medium">{t('channel.actions')}</th>
               </tr>
             </thead>
@@ -603,6 +605,9 @@ export const ChannelManager: React.FC = () => {
                     </td>
                     <td className="px-4 py-3">
                       <div className="h-3 w-48 animate-pulse bg-muted rounded" />
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="h-5 w-12 animate-pulse bg-muted rounded-full" />
                     </td>
                     <td className="px-4 py-3">
                       <div className="h-5 w-12 animate-pulse bg-muted rounded-full" />
@@ -634,6 +639,9 @@ export const ChannelManager: React.FC = () => {
                       <div className="h-5 w-12 animate-pulse bg-muted rounded-full" />
                     </td>
                     <td className="px-4 py-3">
+                      <div className="h-5 w-12 animate-pulse bg-muted rounded-full" />
+                    </td>
+                    <td className="px-4 py-3">
                       <div className="h-3.5 w-3 animate-pulse bg-muted rounded" />
                     </td>
                     <td className="px-4 py-3">
@@ -660,6 +668,9 @@ export const ChannelManager: React.FC = () => {
                       <div className="h-5 w-12 animate-pulse bg-muted rounded-full" />
                     </td>
                     <td className="px-4 py-3">
+                      <div className="h-5 w-12 animate-pulse bg-muted rounded-full" />
+                    </td>
+                    <td className="px-4 py-3">
                       <div className="h-3.5 w-3 animate-pulse bg-muted rounded" />
                     </td>
                     <td className="px-4 py-3">
@@ -675,7 +686,7 @@ export const ChannelManager: React.FC = () => {
                 </>
               ) : channels.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-10 text-center text-muted-foreground">{t('channel.editor.channelListEmpty')}</td>
+                  <td colSpan={8} className="px-4 py-10 text-center text-muted-foreground">{t('channel.editor.channelListEmpty')}</td>
                 </tr>
               ) : (
                 channels.map((channel) => (
@@ -858,10 +869,23 @@ function ChannelRow({
         <td className="min-w-0 px-4 py-3 font-mono text-xs" title={channel.base_url}>
           <div className="truncate">{channel.base_url}</div>
         </td>
-        <td className="px-4 py-3">
-          <span className={cn('rounded-full px-2.5 py-1 text-xs font-medium', channel.enabled ? 'bg-green-100 text-green-700' : 'bg-muted text-muted-foreground')}>
-            {channel.enabled ? t('channel.enabled') : t('channel.disabled')}
-          </span>
+        <td className="px-2 py-3 text-center">
+          <button
+            type="button"
+            className={cn(
+              'inline-flex items-center justify-center rounded-md px-1 py-1 transition-colors hover:bg-muted',
+              saving && 'cursor-not-allowed opacity-60',
+            )}
+            disabled={saving}
+            onClick={(event) => {
+              event.stopPropagation();
+              toggleSystemProxy(!(channel.use_system_proxy ?? false));
+            }}
+            title={channel.use_system_proxy ? '当前渠道走系统代理' : '当前渠道直连'}
+          >
+            <Network className={cn('mr-0.5 h-3.5 w-3.5', channel.use_system_proxy ? 'text-blue-500' : 'text-muted-foreground')} />
+            <Switch checked={channel.use_system_proxy ?? false} disabled={saving} className="pointer-events-none scale-75" />
+          </button>
         </td>
         <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
           {testingChannelId === channel.id ? (
@@ -885,26 +909,29 @@ function ChannelRow({
           })()}
         </td>
         <td className="px-4 py-3 whitespace-nowrap text-center">{entryCountMap?.get(channel.id) ?? 0} / {availableModels.length}</td>
+        <td className="px-2 py-3 text-center">
+          <button
+            type="button"
+            className={cn(
+              'inline-flex items-center justify-center gap-1.5 rounded-md px-1.5 py-1 text-xs font-medium transition-colors hover:bg-muted',
+              channel.enabled ? 'text-green-700' : 'text-muted-foreground',
+              saving && 'cursor-not-allowed opacity-60',
+            )}
+            disabled={saving}
+            onClick={(event) => {
+              event.stopPropagation();
+              toggleEnabled();
+            }}
+            title={channel.enabled ? t('channel.disabled') : t('channel.enabled')}
+          >
+            <Switch checked={channel.enabled} disabled={saving} className="pointer-events-none scale-75" />
+            <span className="w-8 text-left">{channel.enabled ? t('channel.enabled') : t('channel.disabled')}</span>
+          </button>
+        </td>
         <td className="px-4 py-3">
           <div className="flex items-center justify-end gap-2">
-            <div
-              className="flex items-center gap-1 rounded-md px-1.5 py-1"
-              title={channel.use_system_proxy ? '当前渠道走系统代理' : '当前渠道直连'}
-              onClick={(event) => event.stopPropagation()}
-            >
-              <Network className={cn('h-3.5 w-3.5', channel.use_system_proxy ? 'text-blue-500' : 'text-muted-foreground')} />
-              <Switch
-                checked={channel.use_system_proxy ?? false}
-                disabled={saving}
-                onCheckedChange={(checked) => toggleSystemProxy(checked === true)}
-                className="scale-75"
-              />
-            </div>
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={(event) => { event.stopPropagation(); onEdit(); }} title={t('common.edit')}>
               <Edit className="h-4 w-4" />
-            </Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={(event) => { event.stopPropagation(); toggleEnabled(); }} disabled={saving} title={channel.enabled ? t('channel.disabled') : t('channel.enabled')}>
-              {channel.enabled ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
             </Button>
             <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={(event) => { event.stopPropagation(); onDelete(); }} title={t('common.delete')}>
               <Trash2 className="h-4 w-4" />
@@ -915,7 +942,7 @@ function ChannelRow({
 
       {expanded && channel.notes ? (
         <tr className="border-b border-border bg-muted/20">
-          <td colSpan={7} className="px-4 py-3">
+          <td colSpan={8} className="px-4 py-3">
             <div className="space-y-1 text-sm max-w-3xl">
               <div className="font-medium text-muted-foreground">{t('channel.notes')}</div>
               <pre className="whitespace-pre-wrap break-all">{channel.notes}</pre>

@@ -124,6 +124,7 @@
     "enabled": "启用",
     "disabled": "禁用",
     "enabledDesc": "关闭后，该渠道不会被用于模型同步与转发",
+    "proxy": "代理",
     "status": "状态",
     "modelCount": "模型数",
     "responseTime": "响应",

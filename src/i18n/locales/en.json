@@ -124,6 +124,7 @@
     "enabled": "Enabled",
     "disabled": "Disabled",
     "enabledDesc": "When disabled, this channel won't be used for model sync and forwarding",
+    "proxy": "Proxy",
     "status": "Status",
     "modelCount": "Models",
     "responseTime": "Latency",
