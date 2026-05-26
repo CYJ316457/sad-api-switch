@@ -131,7 +131,6 @@ pub async fn test_chat(
                 response_ms: None,
                 error_preview: Some(&body),
             },
-
         );
         return Err(AdminError::Internal(error_message));
     }

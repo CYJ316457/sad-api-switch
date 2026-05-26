@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { GripVertical, Plus, MessageSquare, RefreshCw, XCircle, X, Trash2, Check, ChevronsUpDown, Tag, Link2Off, Network } from "lucide-react";
+import { GripVertical, Plus, MessageSquare, RefreshCw, XCircle, X, Trash2, Check, ChevronsUpDown, Tag, Link2Off, Network, Lock, Unlock } from "lucide-react";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
@@ -214,6 +214,7 @@ function ModelMetaBlock({ metaZh, metaEn, releaseDate, context, output, features
 
 function getEntryStatus(entry: ApiEntry) {
   const now = Math.floor(Date.now() / 1000);
+  if (entry.locked) return entry.enabled ? "closed" : "disabled";
   if (entry.cooldown_until && entry.cooldown_until > now) return "open";
   if (!entry.enabled) return "disabled";
   return "closed";
@@ -314,6 +315,7 @@ function CardBody({
   onTest,
   onDelete,
   onToggleIntent,
+  onToggleLock,
   onEditMapping,
   onGroupChange,
   groups,
@@ -333,6 +335,7 @@ function CardBody({
   onTest: (entry: ApiEntry) => void;
   onDelete: (entry: ApiEntry, options?: { shiftKey?: boolean }) => void;
   onToggleIntent: (entry: ApiEntry, enabled: boolean, options: { ctrlKey: boolean; shiftKey: boolean; metaKey: boolean }) => void;
+  onToggleLock?: (entry: ApiEntry, locked: boolean) => void;
   onEditMapping?: (entry: ApiEntry) => void;
   onGroupChange?: (entry: ApiEntry, group: string) => void;
   groups?: string[];
@@ -349,27 +352,38 @@ function CardBody({
   useSystemProxy?: boolean;
 }) {
   const { t } = useTranslation();
-  const cooldownRemaining = formatCooldownRemaining(entry.cooldown_until);
+  const cooldownRemaining = entry.locked ? null : formatCooldownRemaining(entry.cooldown_until);
   const downstreamModel = getEffectiveDownstreamModel(entry);
   const upstreamModel = entry.upstream_model?.trim() || downstreamModel;
   const hasMapping = upstreamModel !== downstreamModel;
   return (
     <div
-      className="flex flex-1 items-center gap-3 min-w-0"
+      className="flex flex-1 items-center gap-2 min-w-0"
       onContextMenu={(e) => {
         if (!onEditMapping) return;
         e.preventDefault();
         onEditMapping(entry);
       }}
     >
-      <div className="h-10 w-10 rounded-md bg-muted/40 border flex items-center justify-center shrink-0 mt-0.5">
-        <img src={catalogLogo} alt="provider" className="h-6 w-6 shrink-0" loading="lazy" onError={(e) => {
+      <button
+        type="button"
+        className={cn("inline-flex h-7 w-7 items-center justify-center rounded-md border shrink-0 transition-colors", entry.locked ? "border-amber-500/60 bg-amber-500/10 text-amber-600" : "border-border bg-muted/30 text-muted-foreground hover:text-foreground")}
+        title={entry.locked ? t("apiPool.unlockHint") : t("apiPool.lockHint")}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleLock?.(entry, !entry.locked);
+        }}
+      >
+        {entry.locked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
+      </button>
+      <div className="h-9 w-9 rounded-md bg-muted/40 border flex items-center justify-center shrink-0">
+        <img src={catalogLogo} alt="provider" className="h-5 w-5 shrink-0" loading="lazy" onError={(e) => {
           e.currentTarget.onerror = null;
           e.currentTarget.src = `${import.meta.env.BASE_URL}logo/custom.svg`;
         }} />
       </div>
       <div className="flex-1 min-w-0 overflow-hidden">
-        <div className="flex items-center gap-2 min-w-0">
+        <div className="flex items-center gap-1.5 min-w-0">
           <span className="font-medium truncate">{downstreamModel}</span>
           {hasMapping ? (
             <>
@@ -397,7 +411,7 @@ function CardBody({
           {cooldownRemaining ? <span className="text-xs text-red-500 shrink-0">{t("apiPool.cooldownInline", { time: cooldownRemaining })}</span> : null}
           {testErrorDetail ? <span className="text-xs text-yellow-600 shrink-0" title={testErrorDetail}>⚠</span> : null}
         </div>
-          <div className="mt-1 flex items-center gap-2 min-w-0">
+          <div className="mt-0.5 flex items-center gap-2 min-w-0">
             <ModelMetaBlock
               metaZh={modelMetaZh}
               metaEn={modelMetaEn}
@@ -408,16 +422,16 @@ function CardBody({
             />
           </div>
       </div>
-<div className="flex items-center gap-2">
+<div className="flex items-center gap-1.5">
           <div className="flex items-center gap-0.5">
             {groups && onGroupChange ? (
               <GroupSelector value={entry.group_name || "auto"} groups={groups} onChange={(group) => onGroupChange(entry, group)} />
             ) : null}
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground touch-none" onClick={() => onTest(entry)}>
-              <MessageSquare className="h-4 w-4" />
+            <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground touch-none" onClick={() => onTest(entry)}>
+              <MessageSquare className="h-3.5 w-3.5" />
             </Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-red-500 touch-none" onClick={(e) => { e.stopPropagation(); onDelete(entry, { shiftKey: e.shiftKey }); }}>
-              <Trash2 className="h-4 w-4" />
+            <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-red-500 touch-none" onClick={(e) => { e.stopPropagation(); onDelete(entry, { shiftKey: e.shiftKey }); }}>
+              <Trash2 className="h-3.5 w-3.5" />
             </Button>
           </div>
           <Switch checked={entry.enabled} onClick={(e) => {
@@ -434,6 +448,7 @@ function SortablePoolEntryCard(props: {
   onTest: (entry: ApiEntry) => void;
   onDelete: (entry: ApiEntry, options?: { shiftKey?: boolean }) => void;
   onToggleIntent: (entry: ApiEntry, enabled: boolean, options: { ctrlKey: boolean; shiftKey: boolean; metaKey: boolean }) => void;
+  onToggleLock?: (entry: ApiEntry, locked: boolean) => void;
   onEditMapping?: (entry: ApiEntry) => void;
   onGroupChange?: (entry: ApiEntry, group: string) => void;
   groups?: string[];
@@ -453,7 +468,7 @@ function SortablePoolEntryCard(props: {
   const style = { transform: CSS.Transform.toString(transform), transition, zIndex: isDragging ? 10 : undefined, opacity: isDragging ? 0.8 : undefined };
   return (
     <Card ref={setNodeRef} style={style} className={cn("transition-opacity", !props.entry.enabled && "opacity-60")}>
-      <CardContent className="flex items-center gap-3 p-4">
+      <CardContent className="flex items-center gap-2 p-3">
         <div {...attributes} {...listeners} className="cursor-pointer text-muted-foreground hover:text-foreground">
           <GripVertical className="h-3.5 w-3.5 shrink-0" />
         </div>
@@ -468,6 +483,7 @@ function PoolEntryCard(props: {
   onTest: (entry: ApiEntry) => void;
   onDelete: (entry: ApiEntry, options?: { shiftKey?: boolean }) => void;
   onToggleIntent: (entry: ApiEntry, enabled: boolean, options: { ctrlKey: boolean; shiftKey: boolean; metaKey: boolean }) => void;
+  onToggleLock?: (entry: ApiEntry, locked: boolean) => void;
   onEditMapping?: (entry: ApiEntry) => void;
   onGroupChange?: (entry: ApiEntry, group: string) => void;
   groups?: string[];
@@ -485,7 +501,7 @@ function PoolEntryCard(props: {
 }) {
   return (
     <Card className={cn("transition-opacity", !props.entry.enabled && "opacity-60")}>
-      <CardContent className="flex items-center gap-3 p-4">
+      <CardContent className="flex items-center gap-2 p-3">
         <CardBody {...props} />
       </CardContent>
     </Card>
@@ -854,9 +870,24 @@ export function PoolManager() {
     },
   });
 
+  const updateLockMutation = useMutation({
+    mutationFn: ({ id, locked }: { id: string; locked: boolean }) => adapter.pool.updateLocked(id, locked),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: entriesQueryKey });
+      queryClient.invalidateQueries({ queryKey: ["entries", "all"] });
+    },
+    onError: (err) => {
+      toast.error(`${t("common.save")} ${t("common.failed")}: ${err}`);
+    },
+  });
+
   const handleGroupChange = useCallback((entry: ApiEntry, group: string) => {
     updateGroupMutation.mutate({ id: entry.id, groupName: group.trim() || "auto" });
   }, [updateGroupMutation]);
+
+  const handleToggleLock = useCallback((entry: ApiEntry, locked: boolean) => {
+    updateLockMutation.mutate({ id: entry.id, locked });
+  }, [updateLockMutation]);
 
   const handleMappingEdit = useCallback((entry: ApiEntry) => {
     setMappingDialog(entry);
@@ -1038,7 +1069,7 @@ const handleToggleIntent = useCallback(async (entry: ApiEntry, enabled: boolean,
                   <div className="flex flex-col gap-3">
                     {filteredEntries.map((entry) => {
                       const meta = getEntryDisplayMeta(entry, catalogMap);
-                      return <SortablePoolEntryCard key={entry.id} entry={entry} onTest={setTestEntry} onDelete={(entry, opts) => { setDeleteDialog({ entry, channelMode: !!opts?.shiftKey }); }} onToggleIntent={handleToggleIntent} onEditMapping={handleMappingEdit} onGroupChange={handleGroupChange} groups={groups} testingEntryIds={testingEntryIds} testResult={testResults[entry.id]} testErrorDetail={testErrorDetails[entry.id]} catalogLogo={meta.logo} catalogReleaseDate={meta.releaseDate} catalogContext={meta.context} catalogOutput={meta.output} catalogFeatures={meta.features} modelMetaZh={meta.modelMetaZh} modelMetaEn={meta.modelMetaEn} useSystemProxy={channelProxyMap.get(entry.channel_id)} />;
+                      return <SortablePoolEntryCard key={entry.id} entry={entry} onTest={setTestEntry} onDelete={(entry, opts) => { setDeleteDialog({ entry, channelMode: !!opts?.shiftKey }); }} onToggleIntent={handleToggleIntent} onToggleLock={handleToggleLock} onEditMapping={handleMappingEdit} onGroupChange={handleGroupChange} groups={groups} testingEntryIds={testingEntryIds} testResult={testResults[entry.id]} testErrorDetail={testErrorDetails[entry.id]} catalogLogo={meta.logo} catalogReleaseDate={meta.releaseDate} catalogContext={meta.context} catalogOutput={meta.output} catalogFeatures={meta.features} modelMetaZh={meta.modelMetaZh} modelMetaEn={meta.modelMetaEn} useSystemProxy={channelProxyMap.get(entry.channel_id)} />;
                     })}
                     {/* 无限滚动 sentinel */}
                     <div ref={sentinelRef} className="h-4" />
@@ -1054,7 +1085,7 @@ const handleToggleIntent = useCallback(async (entry: ApiEntry, enabled: boolean,
               <div className="flex flex-col gap-3">
                 {filteredEntries.map((entry) => {
                   const meta = getEntryDisplayMeta(entry, catalogMap);
-                  return <PoolEntryCard key={entry.id} entry={entry} onTest={setTestEntry} onDelete={(entry, opts) => { setDeleteDialog({ entry, channelMode: !!opts?.shiftKey }); }} onToggleIntent={handleToggleIntent} onEditMapping={handleMappingEdit} onGroupChange={handleGroupChange} groups={groups} testingEntryIds={testingEntryIds} testResult={testResults[entry.id]} testErrorDetail={testErrorDetails[entry.id]} catalogLogo={meta.logo} catalogReleaseDate={meta.releaseDate} catalogContext={meta.context} catalogOutput={meta.output} catalogFeatures={meta.features} modelMetaZh={meta.modelMetaZh} modelMetaEn={meta.modelMetaEn} useSystemProxy={channelProxyMap.get(entry.channel_id)} />;
+                  return <PoolEntryCard key={entry.id} entry={entry} onTest={setTestEntry} onDelete={(entry, opts) => { setDeleteDialog({ entry, channelMode: !!opts?.shiftKey }); }} onToggleIntent={handleToggleIntent} onToggleLock={handleToggleLock} onEditMapping={handleMappingEdit} onGroupChange={handleGroupChange} groups={groups} testingEntryIds={testingEntryIds} testResult={testResults[entry.id]} testErrorDetail={testErrorDetails[entry.id]} catalogLogo={meta.logo} catalogReleaseDate={meta.releaseDate} catalogContext={meta.context} catalogOutput={meta.output} catalogFeatures={meta.features} modelMetaZh={meta.modelMetaZh} modelMetaEn={meta.modelMetaEn} useSystemProxy={channelProxyMap.get(entry.channel_id)} />;
                 })}
                 <div ref={sentinelRef} className="h-4" />
                 {isFetchingNextPage && (

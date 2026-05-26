@@ -57,11 +57,8 @@ impl Database {
         let page_size = page_size.max(1).min(100);
         let offset = i64::from(page.saturating_sub(1)) * i64::from(page_size);
 
-        let total: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM access_keys",
-            [],
-            |row| row.get(0),
-        )?;
+        let total: i64 =
+            conn.query_row("SELECT COUNT(*) FROM access_keys", [], |row| row.get(0))?;
 
         let mut stmt = conn.prepare(
             "SELECT id, name, key, enabled, created_at, allowed_models FROM access_keys ORDER BY created_at LIMIT ?1 OFFSET ?2",
@@ -175,11 +172,9 @@ fn parse_allowed_models(value: Option<String>) -> rusqlite::Result<Option<Vec<St
     }
     serde_json::from_str::<Vec<String>>(&value)
         .map(Some)
-        .map_err(|err| rusqlite::Error::FromSqlConversionFailure(
-            0,
-            rusqlite::types::Type::Text,
-            Box::new(err),
-        ))
+        .map_err(|err| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(err))
+        })
 }
 
 fn serialize_allowed_models(value: &Option<Vec<String>>) -> Result<Option<String>, AppError> {

@@ -113,7 +113,10 @@ mod tests {
         let split_at = bytes.iter().position(|b| *b >= 0x80).unwrap() + 1;
 
         append_utf8_safe(&mut buffer, &mut remainder, &bytes[..split_at]);
-        assert!(!buffer.contains('\u{FFFD}'), "不应在第一个 chunk 引入替换符");
+        assert!(
+            !buffer.contains('\u{FFFD}'),
+            "不应在第一个 chunk 引入替换符"
+        );
         assert!(!remainder.is_empty(), "不完整的字节应留在 remainder 中");
 
         append_utf8_safe(&mut buffer, &mut remainder, &bytes[split_at..]);

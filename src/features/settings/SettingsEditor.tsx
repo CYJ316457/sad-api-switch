@@ -35,6 +35,7 @@ export function SettingsEditor({
   const [editPassword, setEditPassword] = useState(s.web_admin_password);
   const [editPort, setEditPort] = useState(s.listen_port);
   const [editThreshold, setEditThreshold] = useState(s.circuit_failure_threshold);
+  const [editFailureRetryCount, setEditFailureRetryCount] = useState(s.circuit_failure_retry_count);
   const [editTimeout, setEditTimeout] = useState(s.proxy_connect_timeout_secs);
   const [editDisableCodes, setEditDisableCodes] = useState(s.circuit_disable_codes);
   const [editAdminPort, setEditAdminPort] = useState(s.web_admin_port);
@@ -42,6 +43,7 @@ export function SettingsEditor({
   const passwordEditing = useRef(false);
   const portEditing = useRef(false);
   const thresholdEditing = useRef(false);
+  const failureRetryCountEditing = useRef(false);
   const timeoutEditing = useRef(false);
   const disableCodesEditing = useRef(false);
   const adminPortEditing = useRef(false);
@@ -56,6 +58,11 @@ export function SettingsEditor({
       setEditPassword(s.web_admin_password);
     }
   }, [s.web_admin_password]);
+  useEffect(() => {
+    if (!failureRetryCountEditing.current) {
+      setEditFailureRetryCount(s.circuit_failure_retry_count);
+    }
+  }, [s.circuit_failure_retry_count]);
 
   const proxyPort = proxyStatus?.port ?? s.listen_port;
   const localProxyUrl = `http://127.0.0.1:${proxyPort}/v1`;
@@ -155,6 +162,24 @@ export function SettingsEditor({
               onBlur={() => {
                 thresholdEditing.current = false;
                 onChange("circuit_failure_threshold", editThreshold);
+              }}
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <div>
+              <Label>{t("settings.circuit.failureRetryCount")}</Label>
+              <p className="text-xs text-muted-foreground">{t("settings.circuit.failureRetryCountDesc")}</p>
+            </div>
+            <Input
+              type="number"
+              min={0}
+              className="w-32"
+              value={editFailureRetryCount}
+              onFocus={() => { failureRetryCountEditing.current = true; }}
+              onChange={(event) => setEditFailureRetryCount(Math.max(0, parseInt(event.target.value) || 0))}
+              onBlur={() => {
+                failureRetryCountEditing.current = false;
+                onChange("circuit_failure_retry_count", editFailureRetryCount);
               }}
             />
           </div>

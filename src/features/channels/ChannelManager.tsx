@@ -438,6 +438,7 @@ export const ChannelManager: React.FC = () => {
 
         for (const backupEntry of entriesToRestore) {
           const upstreamModel = getEntryUpstreamModel(backupEntry);
+          const backupLocked = Boolean(backupEntry.locked);
           const key = `${backupEntry.channel_id}\u0000${upstreamModel}`;
           const matchingEntries = currentEntriesByChannelAndUpstream.get(key) ?? [];
           const currentEntry = matchingEntries.shift() ?? await api.pool.create({
@@ -460,6 +461,9 @@ export const ChannelManager: React.FC = () => {
           }
           if (currentEntry.enabled !== backupEntry.enabled) {
             await api.pool.toggle(currentEntry.id, backupEntry.enabled);
+          }
+          if (Boolean(currentEntry.locked) !== backupLocked) {
+            await api.pool.updateLocked(currentEntry.id, backupLocked);
           }
         }
       }
@@ -846,7 +850,7 @@ function ChannelRow({
   return (
     <>
       <tr className="border-b border-border hover:bg-muted/30 cursor-pointer" onClick={onToggle}>
-        <td className="min-w-0 px-4 py-3">
+        <td className="min-w-0 px-3 py-2">
           <div className="max-w-full text-left">
             <div className="truncate font-medium flex items-center gap-1">
               {channel.name}
@@ -863,17 +867,17 @@ function ChannelRow({
             </div>
           </div>
         </td>
-        <td className="px-4 py-3">
+        <td className="px-3 py-2">
           <span className="rounded bg-secondary px-2 py-0.5 text-xs text-muted-foreground">{channel.api_type}</span>
         </td>
-        <td className="min-w-0 px-4 py-3 font-mono text-xs" title={channel.base_url}>
+        <td className="min-w-0 px-3 py-2 font-mono text-xs" title={channel.base_url}>
           <div className="truncate">{channel.base_url}</div>
         </td>
-        <td className="px-2 py-3 text-center">
+        <td className="px-2 py-2 text-center">
           <button
             type="button"
             className={cn(
-              'inline-flex items-center justify-center rounded-md px-1 py-1 transition-colors hover:bg-muted',
+              'inline-flex items-center justify-center rounded-md px-1 py-0.5 transition-colors hover:bg-muted',
               saving && 'cursor-not-allowed opacity-60',
             )}
             disabled={saving}
@@ -887,7 +891,7 @@ function ChannelRow({
             <Switch checked={channel.use_system_proxy ?? false} disabled={saving} className="pointer-events-none scale-75" />
           </button>
         </td>
-        <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
+        <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">
           {testingChannelId === channel.id ? (
             <RefreshCw className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
           ) : (() => {
@@ -908,12 +912,12 @@ function ChannelRow({
             return <span className="text-red-500" title={t('channel.testAllLatency')}><XCircle className="h-3.5 w-3.5" /></span>;
           })()}
         </td>
-        <td className="px-4 py-3 whitespace-nowrap text-center">{entryCountMap?.get(channel.id) ?? 0} / {availableModels.length}</td>
-        <td className="px-2 py-3 text-center">
+        <td className="px-3 py-2 whitespace-nowrap text-center">{entryCountMap?.get(channel.id) ?? 0} / {availableModels.length}</td>
+        <td className="px-2 py-2 text-center">
           <button
             type="button"
             className={cn(
-              'inline-flex items-center justify-center gap-1.5 rounded-md px-1.5 py-1 text-xs font-medium transition-colors hover:bg-muted',
+              'inline-flex items-center justify-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium transition-colors hover:bg-muted',
               channel.enabled ? 'text-green-700' : 'text-muted-foreground',
               saving && 'cursor-not-allowed opacity-60',
             )}
@@ -928,13 +932,13 @@ function ChannelRow({
             <span className="w-8 text-left">{channel.enabled ? t('channel.enabled') : t('channel.disabled')}</span>
           </button>
         </td>
-        <td className="px-4 py-3">
-          <div className="flex items-center justify-end gap-2">
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={(event) => { event.stopPropagation(); onEdit(); }} title={t('common.edit')}>
-              <Edit className="h-4 w-4" />
+        <td className="px-3 py-2">
+          <div className="flex items-center justify-end gap-1.5">
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(event) => { event.stopPropagation(); onEdit(); }} title={t('common.edit')}>
+              <Edit className="h-3.5 w-3.5" />
             </Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={(event) => { event.stopPropagation(); onDelete(); }} title={t('common.delete')}>
-              <Trash2 className="h-4 w-4" />
+            <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={(event) => { event.stopPropagation(); onDelete(); }} title={t('common.delete')}>
+              <Trash2 className="h-3.5 w-3.5" />
             </Button>
           </div>
         </td>
@@ -942,7 +946,7 @@ function ChannelRow({
 
       {expanded && channel.notes ? (
         <tr className="border-b border-border bg-muted/20">
-          <td colSpan={8} className="px-4 py-3">
+          <td colSpan={8} className="px-3 py-2">
             <div className="space-y-1 text-sm max-w-3xl">
               <div className="font-medium text-muted-foreground">{t('channel.notes')}</div>
               <pre className="whitespace-pre-wrap break-all">{channel.notes}</pre>
@@ -1365,7 +1369,7 @@ function ChannelEditorDialog({
                   </div>
                 )}
               </div>
-              <Button size="sm" variant="outline" className="gap-1.5" onClick={handleFetchModels} disabled={!canSave || probingUrl || urlProbe?.reachable === false || fetchingModels}>
+              <Button size="sm" variant="outline" className="gap-1.5" onClick={handleFetchModels} disabled={!canSave || !form.enabled || probingUrl || urlProbe?.reachable === false || fetchingModels}>
                 <RefreshCw className={cn('h-3.5 w-3.5', fetchingModels && 'animate-spin')} />
                 {fetchingModels ? t('channel.editor.fetching') : t('channel.editor.fetchModels')}
               </Button>

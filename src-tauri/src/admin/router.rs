@@ -29,7 +29,10 @@ pub fn build_admin_router(state: AdminState) -> Router {
             "/admin/channels",
             get(channel_handlers::list).post(channel_handlers::create),
         )
-        .route("/admin/channels/paginated", get(channel_handlers::list_paginated))
+        .route(
+            "/admin/channels/paginated",
+            get(channel_handlers::list_paginated),
+        )
         .route(
             "/admin/channels/:id",
             get(channel_handlers::list)
@@ -80,13 +83,20 @@ pub fn build_admin_router(state: AdminState) -> Router {
         .route("/admin/pool/groups", get(pool_handlers::get_groups))
         .route("/admin/pool/:id/group", put(pool_handlers::update_group))
         .route("/admin/pool/:id/model", put(pool_handlers::update_model))
-        .route("/admin/pool/:id/upstream-model", put(pool_handlers::update_upstream_model))
+        .route("/admin/pool/:id/locked", put(pool_handlers::update_locked))
+        .route(
+            "/admin/pool/:id/upstream-model",
+            put(pool_handlers::update_upstream_model),
+        )
         // Token API routes – all require auth
         .route(
             "/admin/tokens",
             get(token_handlers::list_tokens).post(token_handlers::create_token),
         )
-        .route("/admin/tokens/paginated", get(token_handlers::list_tokens_paginated))
+        .route(
+            "/admin/tokens/paginated",
+            get(token_handlers::list_tokens_paginated),
+        )
         .route("/admin/tokens/:id", delete(token_handlers::delete_token))
         .route(
             "/admin/tokens/:id/toggle",

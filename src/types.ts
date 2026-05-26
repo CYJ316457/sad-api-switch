@@ -83,6 +83,7 @@ export interface ApiEntry {
   group_name: string;
   sort_index: number;
   enabled: boolean;
+  locked: boolean;
   cooldown_until?: number | null;
   circuit_state: CircuitState;
   created_at: number;
@@ -224,6 +225,7 @@ export interface AppSettings {
   lan_share_enabled: boolean;
   access_key_required: boolean;
   circuit_failure_threshold: number;
+  circuit_failure_retry_count: number;
   proxy_connect_timeout_secs: number;
   circuit_recovery_secs: number;
   circuit_disable_codes: string;
@@ -255,6 +257,7 @@ export const DEFAULT_SETTINGS: VersionedAppSettings = {
   lan_share_enabled: false,
   access_key_required: false,
   circuit_failure_threshold: 5,
+  circuit_failure_retry_count: 2,
   proxy_connect_timeout_secs: 30,
   circuit_recovery_secs: 300,
   circuit_disable_codes: "401,403,410",

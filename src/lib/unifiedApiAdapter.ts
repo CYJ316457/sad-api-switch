@@ -387,6 +387,11 @@ export const apiAdapter: ApiAdapter = {
         ? tauriCmd<void>('update_entry_model', { id, model })
         : webRequest<void>('PUT', `/pool/${id}/model`, { model }),
 
+    updateLocked: (id, locked) =>
+      useTauri()
+        ? tauriCmd<void>('update_entry_locked', { id, locked })
+        : webRequest<void>('PUT', `/pool/${id}/locked`, { locked }),
+
     updateUpstreamModel: (id, upstreamModel) =>
       useTauri()
         ? tauriCmd<void>('update_entry_upstream_model', { id, upstreamModel })

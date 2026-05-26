@@ -33,6 +33,7 @@ export interface ApiAdapter {
     getGroups(): Promise<string[]>;
     updateGroup(id: string, groupName: string): Promise<void>;
     updateModel(id: string, model: string): Promise<void>;
+    updateLocked(id: string, locked: boolean): Promise<void>;
     updateUpstreamModel(id: string, upstreamModel: string): Promise<void>;
   };
   tokens: {

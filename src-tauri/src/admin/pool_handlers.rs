@@ -56,6 +56,11 @@ pub struct UpdateModelParams {
     pub model: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct UpdateLockedParams {
+    pub locked: Option<bool>,
+}
+
 // ---------- Handlers -------------------------------------------------------
 
 /// GET /admin/pool - List all API entries
@@ -204,6 +209,26 @@ pub async fn update_model(
 ) -> Result<Json<serde_json::Value>, AdminError> {
     let model = payload.model.unwrap_or_default();
     pool_service::update_entry_model(&state.db, &id, &model)?;
+    Ok(Json(serde_json::json!({"ok": true})))
+}
+
+/// PUT /admin/pool/:id/locked - Update the locked state for an entry.
+pub async fn update_locked(
+    State(state): State<AdminState>,
+    Path(id): Path<String>,
+    Json(payload): Json<UpdateLockedParams>,
+) -> Result<Json<serde_json::Value>, AdminError> {
+    let locked = payload.locked.unwrap_or(false);
+    pool_service::update_entry_locked(&state.db, &id, locked)?;
+    if locked {
+        if let Some(runtime) = &state.runtime {
+            runtime.failure_counts.write().await.remove(&id);
+            let proxy = runtime.proxy.read().await;
+            if let Some(proxy) = proxy.as_ref() {
+                proxy.clear_entry_runtime_failure_state(&id).await;
+            }
+        }
+    }
     Ok(Json(serde_json::json!({"ok": true})))
 }
 

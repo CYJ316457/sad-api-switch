@@ -12,9 +12,9 @@ mod state_version;
 use admin::AdminServer;
 use database::{AppSettings, Database};
 use proxy::ProxyServer;
-use services::{channel_service, pool_service};
 use runtime_mode::{ModeSource, RuntimeMode};
 use serde::{Deserialize, Serialize};
+use services::{channel_service, pool_service};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
@@ -278,6 +278,7 @@ Some(handle.clone()),
         commands::pool::get_all_groups,
         commands::pool::update_entry_group,
         commands::pool::update_entry_model,
+        commands::pool::update_entry_locked,
         commands::pool::update_entry_upstream_model,
         commands::token::list_access_keys,
         commands::token::list_access_keys_paginated,
@@ -379,7 +380,9 @@ static LAST_TRAY_REFRESH: OnceLock<std::sync::Mutex<std::time::Instant>> = OnceL
 fn tray_debounce_check() -> bool {
     let now = std::time::Instant::now();
     let lock = LAST_TRAY_REFRESH.get_or_init(|| std::sync::Mutex::new(now));
-    let Ok(mut last) = lock.lock() else { return false };
+    let Ok(mut last) = lock.lock() else {
+        return false;
+    };
     if now.duration_since(*last).as_millis() < TRAY_DEBOUNCE_MS as u128 {
         return false; // 防抖：500ms 内不重复重建
     }
@@ -552,7 +555,9 @@ fn run_headless() {
         println!("  Press Ctrl+C to stop");
 
         // 等待 Ctrl+C
-        tokio::signal::ctrl_c().await.expect("Failed to listen for ctrl+c");
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to listen for ctrl+c");
         println!("\nShutting down...");
 
         // 优雅停止代理

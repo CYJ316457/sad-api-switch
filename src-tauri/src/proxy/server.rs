@@ -132,7 +132,10 @@ impl ProxyServer {
             )
             .route("/v1/messages", post(handlers::handle_messages))
             .route("/v1/models", get(handlers::handle_list_models))
-            .route("/anthropic/v1/models", get(handlers::handle_list_models_claude))
+            .route(
+                "/anthropic/v1/models",
+                get(handlers::handle_list_models_claude),
+            )
             .route("/v1beta/models", get(handlers::handle_list_models_gemini))
             .route(
                 "/openai/deployments",
@@ -145,7 +148,10 @@ impl ProxyServer {
             // Gemini native endpoint (generateContent + streamGenerateContent)
             .route("/v1beta/models/*rest", post(handlers::handle_gemini_native))
             // Gemini single model detail
-            .route("/v1beta/models/{model}", get(handlers::handle_gemini_model_detail))
+            .route(
+                "/v1beta/models/{model}",
+                get(handlers::handle_gemini_model_detail),
+            )
             // Azure native endpoint
             .route(
                 "/openai/deployments/*rest",
@@ -207,6 +213,11 @@ impl ProxyServer {
         } else {
             Err("Proxy not running".to_string())
         }
+    }
+
+    pub async fn clear_entry_runtime_failure_state(&self, entry_id: &str) {
+        self.state.failure_counts.write().await.remove(entry_id);
+        self.state.circuit_breakers.write().await.remove(entry_id);
     }
 
     pub fn get_status(&self) -> ProxyStatus {

@@ -10,6 +10,7 @@ pub struct AppSettings {
     pub lan_share_enabled: bool,
     pub access_key_required: bool,
     pub circuit_failure_threshold: i32,
+    pub circuit_failure_retry_count: i32,
     pub proxy_connect_timeout_secs: u64,
     pub circuit_recovery_secs: i64,
     pub circuit_disable_codes: String,
@@ -40,6 +41,7 @@ impl Default for AppSettings {
             lan_share_enabled: false,
             access_key_required: false,
             circuit_failure_threshold: 5,
+            circuit_failure_retry_count: 2,
             proxy_connect_timeout_secs: 30,
             circuit_recovery_secs: 300,
             circuit_disable_codes: "401,403,410".to_string(),
@@ -91,6 +93,9 @@ impl Database {
         }
         if let Some(v) = kv.get("circuit_failure_threshold") {
             settings.circuit_failure_threshold = v.parse().unwrap_or(5);
+        }
+        if let Some(v) = kv.get("circuit_failure_retry_count") {
+            settings.circuit_failure_retry_count = v.parse().unwrap_or(2);
         }
         if let Some(v) = kv.get("proxy_connect_timeout_secs") {
             settings.proxy_connect_timeout_secs = v.parse().unwrap_or(30);
@@ -178,6 +183,10 @@ impl Database {
             (
                 "circuit_failure_threshold",
                 &updates.circuit_failure_threshold.to_string(),
+            ),
+            (
+                "circuit_failure_retry_count",
+                &updates.circuit_failure_retry_count.to_string(),
             ),
             (
                 "proxy_connect_timeout_secs",

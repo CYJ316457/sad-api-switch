@@ -240,6 +240,27 @@ pub async fn update_entry_model(
 }
 
 #[tauri::command]
+pub async fn update_entry_locked(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    locked: bool,
+) -> Result<(), AppError> {
+    pool_service::update_entry_locked(&state.db, &id, locked)?;
+    if locked {
+        state.failure_counts.write().await.remove(&id);
+        let proxy = state.proxy.read().await;
+        if let Some(proxy) = proxy.as_ref() {
+            proxy.clear_entry_runtime_failure_state(&id).await;
+        }
+    }
+    let _ = app.emit("entries-changed", ());
+    crate::state_version::bump();
+    crate::refresh_tray_if_enabled(&app);
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn update_entry_upstream_model(
     app: tauri::AppHandle,
     state: State<'_, AppState>,

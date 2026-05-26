@@ -1,7 +1,7 @@
+use super::{join_url, ProtocolAdapter};
 use axum::body::Body;
 use bytes::Bytes;
 use futures::StreamExt;
-use super::{join_url, ProtocolAdapter};
 /// Anthropic (Claude) protocol adapter.
 ///
 /// Converts between OpenAI format (external) and Anthropic native format (upstream).
@@ -1760,7 +1760,9 @@ pub fn transform_openai_sse_to_claude_stream(
         .header("connection", "keep-alive")
         .header("x-accel-buffering", "no")
         .body(Body::from_stream(transformed_stream))
-        .map_err(|e| crate::error::AppError::Internal(format!("Failed to build Claude SSE response: {e}")))
+        .map_err(|e| {
+            crate::error::AppError::Internal(format!("Failed to build Claude SSE response: {e}"))
+        })
 }
 
 /// Extract text from Claude content (string or array of text blocks).

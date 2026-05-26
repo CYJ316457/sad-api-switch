@@ -21,7 +21,6 @@ pub struct TestUsageLogInput<'a> {
     pub error_preview: Option<&'a str>,
 }
 
-
 /// 记录测试对话和测速产生的真实消耗。
 ///
 /// 只记录元数据、耗时和 token 用量，不记录 API Key、用户提示词、请求体或模型回复。
@@ -49,7 +48,6 @@ pub fn insert_test_usage_log(
         "error_kind": input.error_kind,
         "error_preview": input.error_preview,
     });
-
 
     if let Err(e) = db.insert_usage_log(
         log_type,

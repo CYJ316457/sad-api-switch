@@ -6,7 +6,7 @@ use super::server::ProxyState;
 use crate::database::{AccessKey, ApiEntry, AppSettings, Database};
 use crate::refresh_tray_if_enabled;
 use axum::body::Body;
-use axum::http::HeaderMap;
+use axum::http::{header, HeaderMap};
 use axum::response::IntoResponse;
 use bytes::Bytes;
 use futures::Stream;
@@ -60,7 +60,9 @@ fn is_completed_stream_success(
 ) -> bool {
     // 仅在 HTTP 200、无 SSE 错误且存在有效输出时判定成功。
     // 有效输出定义为：出现文本 delta、出现工具调用、或返回的 completion_tokens>0。
-    status_code == 200 && !has_sse_error && (has_text_delta || has_tool_calls || completion_tokens > 0)
+    status_code == 200
+        && !has_sse_error
+        && (has_text_delta || has_tool_calls || completion_tokens > 0)
 }
 
 fn is_recoverable_decode_timeout_after_stream_started(
@@ -76,19 +78,14 @@ fn is_recoverable_decode_timeout_after_stream_started(
     is_decode: bool,
     is_body: bool,
 ) -> bool {
-    let stream_started = status_code == 200
-        && (first_token_ms > 0 || chunk_count > 0 || streamed_bytes > 0);
+    let stream_started =
+        status_code == 200 && (first_token_ms > 0 || chunk_count > 0 || streamed_bytes > 0);
     let has_valid_output = has_text_delta || has_tool_calls || completion_tokens > 0;
 
     // 临时止血：HTTP 200 且已经开始推流后出现 body/decode timeout，
     // 更像传输中途不完整，而不是模型、Token 或上游入口不可用。
     // 本次请求仍记录失败，但不触发普通冷却/长期禁用阈值。
-    stream_started
-        && is_timeout
-        && is_decode
-        && !is_body
-        && !has_valid_output
-        && !has_sse_error
+    stream_started && is_timeout && is_decode && !is_body && !has_valid_output && !has_sse_error
 }
 
 fn is_decode_timeout_after_stream_started(
@@ -188,6 +185,18 @@ fn attempt_path_with_current(
     let mut attempts = prior_attempts.to_vec();
     push_attempt(&mut attempts, entry, status_code, success, error);
     attempt_path_json(&attempts)
+}
+
+fn normalized_failure_retry_count(value: i32) -> u32 {
+    value.max(0) as u32
+}
+
+fn per_entry_attempts(settings: &AppSettings) -> u32 {
+    normalized_failure_retry_count(settings.circuit_failure_retry_count).saturating_add(1)
+}
+
+fn should_skip_entry_circuit_management(entry: &ApiEntry) -> bool {
+    entry.locked
 }
 
 fn sanitize_url_for_log(url: &str) -> String {
@@ -366,6 +375,8 @@ struct StreamLogGuard {
     prior_attempts: Vec<AttemptInfo>,
     upstream_url: String,
     response_headers: reqwest::header::HeaderMap,
+    client_fingerprint: Option<String>,
+    client_user_agent: Option<String>,
 }
 
 impl Drop for StreamLogGuard {
@@ -413,6 +424,8 @@ impl Drop for StreamLogGuard {
             let entry = self.entry.clone();
             let requested_model = self.requested_model.clone();
             let status_code = self.status_code;
+            let client_fingerprint = self.client_fingerprint.clone();
+            let client_user_agent = self.client_user_agent.clone();
             tokio::spawn(async move {
                 log_usage(
                     &db,
@@ -430,6 +443,8 @@ impl Drop for StreamLogGuard {
                     status_code,
                     success,
                     Some(stream_summary.as_str()),
+                    client_fingerprint.as_deref(),
+                    client_user_agent.as_deref(),
                     Some(attempt_path.as_str()),
                     Some(StreamEndReason::Dropped),
                 );
@@ -448,7 +463,7 @@ pub async fn forward_with_retry(
     state: &ProxyState,
     entries: &[ApiEntry],
     body: &Value,
-    _original_headers: &HeaderMap,
+    original_headers: &HeaderMap,
     requested_model: &str,
     access_key: Option<&AccessKey>,
     is_stream: bool,
@@ -457,12 +472,12 @@ pub async fn forward_with_retry(
 ) -> Result<axum::response::Response, ProxyError> {
     let mut last_error: Option<(String, u16)> = None;
     let mut attempts: Vec<AttemptInfo> = Vec::new();
+    let client_fingerprint = detect_client_fingerprint(original_headers);
+    let client_user_agent = client_user_agent(original_headers);
 
     for entry in entries {
-        let start = Instant::now();
-
         // Check circuit breaker
-        {
+        if !should_skip_entry_circuit_management(entry) {
             let breakers = state.circuit_breakers.read().await;
             if let Some(cb) = breakers.get(&entry.id) {
                 if !cb.is_available() {
@@ -471,27 +486,77 @@ pub async fn forward_with_retry(
             }
         }
 
-        match forward_single(
-            state,
-            entry,
-            body,
-            requested_model,
-            access_key,
-            is_stream,
-            attempts.clone(),
-            middleware,
-            &caller_kind,
-        )
-        .await
-        {
-            Ok(result) => {
-                let elapsed = start.elapsed();
+        let entry_cycle_start = Instant::now();
+        let settings = state.settings.read().await.clone();
+        let total_attempts = per_entry_attempts(&settings);
+        let retry_count = total_attempts.saturating_sub(1);
 
-                if !is_stream {
-                    record_circuit_success(state, &entry.id).await;
-                    push_attempt(&mut attempts, entry, result.status_code, true, None);
+        for attempt_index in 0..=retry_count {
+            match forward_single(
+                state,
+                entry,
+                body,
+                requested_model,
+                access_key,
+                is_stream,
+                attempts.clone(),
+                client_fingerprint.as_deref(),
+                client_user_agent.as_deref(),
+                middleware,
+                &caller_kind,
+            )
+            .await
+            {
+                Ok(result) => {
+                    if attempt_index > 0 && is_stream {
+                        clear_entry_cooldown(state, &entry.id).await;
+                    }
+                    if !is_stream {
+                        record_circuit_success(state, &entry.id).await;
+                        push_attempt(&mut attempts, entry, result.status_code, true, None);
+                        let attempt_path = attempt_path_json(&attempts);
+                        let latency_ms = entry_cycle_start.elapsed().as_millis() as i64;
+                        log_usage(
+                            &state.db,
+                            &state.app_handle,
+                            access_key,
+                            entry,
+                            requested_model,
+                            is_stream,
+                            result.prompt_tokens,
+                            result.completion_tokens,
+                            result.cache_read_tokens,
+                            result.cache_write_tokens,
+                            result.first_token_ms,
+                            latency_ms,
+                            result.status_code,
+                            true,
+                            None,
+                            client_fingerprint.as_deref(),
+                            client_user_agent.as_deref(),
+                            Some(attempt_path.as_str()),
+                            None,
+                        );
+                    }
+                    return Ok(result.response);
+                }
+                Err((e, status)) => {
+                    let log_status = if status > 0 { status as i32 } else { 502 };
+                    push_attempt(&mut attempts, entry, log_status, false, Some(e.clone()));
+
+                    if attempt_index < retry_count {
+                        log::warn!(
+                            "Entry {} failed on attempt {}/{} with status {}. Retrying same entry.",
+                            entry.id,
+                            attempt_index + 1,
+                            total_attempts,
+                            log_status
+                        );
+                        continue;
+                    }
+
+                    let latency_ms = entry_cycle_start.elapsed().as_millis() as i64;
                     let attempt_path = attempt_path_json(&attempts);
-                    let latency_ms = elapsed.as_millis() as i64;
                     log_usage(
                         &state.db,
                         &state.app_handle,
@@ -499,62 +564,39 @@ pub async fn forward_with_retry(
                         entry,
                         requested_model,
                         is_stream,
-                        result.prompt_tokens,
-                        result.completion_tokens,
-                        result.cache_read_tokens,
-                        result.cache_write_tokens,
-                        result.first_token_ms,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
                         latency_ms,
-                        result.status_code,
-                        true,
-                        None,
+                        log_status,
+                        false,
+                        Some(&e),
+                        client_fingerprint.as_deref(),
+                        client_user_agent.as_deref(),
                         Some(attempt_path.as_str()),
                         None,
                     );
+
+                    // Connection failures report status=0 and must remain recoverable.
+                    if should_skip_entry_circuit_management(entry) {
+                        log::warn!(
+                            "Locked entry {} failed with status {}. Skipping cooldown and disable.",
+                            entry.id,
+                            log_status
+                        );
+                    } else if status > 0
+                        && should_disable_entry_for_status(&settings.circuit_disable_codes, status)
+                    {
+                        disable_entry(state, entry).await;
+                    } else {
+                        cool_down_entry(state, entry).await;
+                    }
+
+                    last_error = Some((e, status));
+                    break;
                 }
-                return Ok(result.response);
-            }
-            Err((e, status)) => {
-                let elapsed = start.elapsed();
-                let latency_ms = elapsed.as_millis() as i64;
-                let log_status = if status > 0 { status as i32 } else { 502 };
-                let settings = state.settings.read().await.clone();
-                push_attempt(&mut attempts, entry, log_status, false, Some(e.clone()));
-                let attempt_path = attempt_path_json(&attempts);
-
-                // Step 1: Always write usage log for every failed attempt
-                log_usage(
-                    &state.db,
-                    &state.app_handle,
-                    access_key,
-                    entry,
-                    requested_model,
-                    is_stream,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    latency_ms,
-                    log_status,
-                    false,
-                    Some(&e),
-                    Some(attempt_path.as_str()),
-                    None,
-                );
-
-                // Step 2: disable unrecoverable status codes, otherwise cool down briefly.
-                // Connection failures report status=0 and must remain recoverable.
-                if status > 0
-                    && should_disable_entry_for_status(&settings.circuit_disable_codes, status)
-                {
-                    disable_entry(state, entry).await;
-                } else {
-                    cool_down_entry(state, entry).await;
-                }
-
-                last_error = Some((e, status));
-                continue;
             }
         }
     }
@@ -581,6 +623,8 @@ async fn forward_single(
     access_key: Option<&AccessKey>,
     is_stream: bool,
     prior_attempts: Vec<AttemptInfo>,
+    client_fingerprint: Option<&str>,
+    client_user_agent: Option<&str>,
     middleware: &[Arc<dyn super::middleware::ForwarderMiddleware>],
     caller_kind: &CallerKind,
 ) -> Result<ForwardResult, ForwardError> {
@@ -657,6 +701,8 @@ async fn forward_single(
             &url,
             response,
             status_code,
+            client_fingerprint,
+            client_user_agent,
             needs_transform,
             adapter,
             request_start,
@@ -713,8 +759,9 @@ fn extract_usage_tokens(body: &Value) -> UsageTokens {
     let cache_read_tokens = usage_i64_at(usage, &["prompt_tokens_details", "cached_tokens"])
         + usage_i64_at(usage, &["input_tokens_details", "cached_tokens"])
         + usage_i64_at(usage, &["cache_read_input_tokens"]);
-    let cache_write_tokens = usage_i64_at(usage, &["prompt_tokens_details", "cache_creation_tokens"])
-        + usage_i64_at(usage, &["cache_creation_input_tokens"]);
+    let cache_write_tokens =
+        usage_i64_at(usage, &["prompt_tokens_details", "cache_creation_tokens"])
+            + usage_i64_at(usage, &["cache_creation_input_tokens"]);
     UsageTokens {
         prompt_tokens,
         completion_tokens,
@@ -800,6 +847,8 @@ fn build_streaming_response(
     upstream_url: &str,
     response: reqwest::Response,
     status_code: i32,
+    client_fingerprint: Option<&str>,
+    client_user_agent: Option<&str>,
     needs_transform: bool,
     adapter: Box<dyn super::protocol::ProtocolAdapter + Send + Sync>,
     request_start: std::time::Instant,
@@ -818,6 +867,8 @@ fn build_streaming_response(
     let entry = entry.clone();
     let access_key = access_key.cloned();
     let requested_model = requested_model.to_string();
+    let client_fingerprint = client_fingerprint.map(str::to_string);
+    let client_user_agent = client_user_agent.map(str::to_string);
     let first_token_ms = Arc::new(AtomicI64::new(0));
     let prompt_tokens = Arc::new(AtomicI64::new(0));
     let completion_tokens = Arc::new(AtomicI64::new(0));
@@ -843,6 +894,7 @@ fn build_streaming_response(
     let entries_app_handle = state.app_handle.clone();
     let success_circuit_breakers = state.circuit_breakers.clone();
     let success_failure_counts = state.failure_counts.clone();
+    let entry_locked = entry.locked;
 
     // Guard captured by the move closure → lives as long as the stream body
     let guard = StreamLogGuard {
@@ -864,6 +916,8 @@ fn build_streaming_response(
         prior_attempts: prior_attempts.clone(),
         upstream_url: upstream_url.clone(),
         response_headers: response_headers.clone(),
+        client_fingerprint: client_fingerprint.clone(),
+        client_user_agent: client_user_agent.clone(),
     };
 
     let body_stream =
@@ -892,6 +946,8 @@ fn build_streaming_response(
                     let ak2 = access_key.clone();
                     let e2 = entry.clone();
                     let rm2 = requested_model.clone();
+                    let cf2 = client_fingerprint.clone();
+                    let cua2 = client_user_agent.clone();
                     let pt = prompt_tokens.load(Ordering::SeqCst);
                     let ct = completion_tokens.load(Ordering::SeqCst);
                     let cr = cache_read_tokens.load(Ordering::SeqCst);
@@ -915,6 +971,8 @@ fn build_streaming_response(
                             504,
                             false,
                             Some("stream idle timeout"),
+                            cf2.as_deref(),
+                            cua2.as_deref(),
                             Some(attempt_path.as_str()),
                             Some(StreamEndReason::Timeout),
                         );
@@ -926,6 +984,7 @@ fn build_streaming_response(
                         db.clone(),
                         entries_app_handle.clone(),
                         entry_id.clone(),
+                        entry_locked,
                     );
                 }
                 return Poll::Ready(Some(Err(std::io::Error::new(
@@ -963,6 +1022,8 @@ fn build_streaming_response(
                             let ak2 = access_key.clone();
                             let e2 = entry.clone();
                             let rm2 = requested_model.clone();
+                            let cf2 = client_fingerprint.clone();
+                            let cua2 = client_user_agent.clone();
                             let pt = prompt_tokens.load(Ordering::SeqCst);
                             let ct = completion_tokens.load(Ordering::SeqCst);
                             let cr = cache_read_tokens.load(Ordering::SeqCst);
@@ -986,6 +1047,8 @@ fn build_streaming_response(
                                     413,
                                     false,
                                     Some("stream buffer exceeds 10MB limit"),
+                                    cf2.as_deref(),
+                                    cua2.as_deref(),
                                     Some(attempt_path.as_str()),
                                     Some(StreamEndReason::Dropped),
                                 );
@@ -997,6 +1060,7 @@ fn build_streaming_response(
                                 db.clone(),
                                 entries_app_handle.clone(),
                                 entry_id.clone(),
+                                entry_locked,
                             );
                         }
                         return Poll::Ready(Some(Err(std::io::Error::new(
@@ -1120,6 +1184,8 @@ fn build_streaming_response(
                         let ak2 = access_key.clone();
                         let e2 = entry.clone();
                         let rm2 = requested_model.clone();
+                        let cf2 = client_fingerprint.clone();
+                        let cua2 = client_user_agent.clone();
                         tokio::spawn(async move {
                             log_usage(
                                 &db2,
@@ -1137,6 +1203,8 @@ fn build_streaming_response(
                                 502,
                                 false,
                                 Some(error_message.as_str()),
+                                cf2.as_deref(),
+                                cua2.as_deref(),
                                 Some(attempt_path.as_str()),
                                 Some(stream_end_reason),
                             );
@@ -1149,6 +1217,7 @@ fn build_streaming_response(
                                 db.clone(),
                                 entries_app_handle.clone(),
                                 entry_id.clone(),
+                                entry_locked,
                             );
                         }
                     }
@@ -1227,6 +1296,8 @@ fn build_streaming_response(
                         let eid = entry_id.clone();
                         let sdb = settings_cache.clone();
                         let eah = entries_app_handle.clone();
+                        let cf2 = client_fingerprint.clone();
+                        let cua2 = client_user_agent.clone();
                         tokio::spawn(async move {
                             log_usage(
                                 &db2,
@@ -1244,13 +1315,23 @@ fn build_streaming_response(
                                 sc,
                                 success,
                                 Some(log_message.as_str()),
+                                cf2.as_deref(),
+                                cua2.as_deref(),
                                 Some(attempt_path.as_str()),
                                 Some(StreamEndReason::Done),
                             );
                             if success {
                                 spawn_record_circuit_success(scb, sfc, sdb, db2.clone(), eah, eid);
                             } else {
-                                spawn_cool_down_entry(scb, sfc, sdb, db2.clone(), eah, eid);
+                                spawn_cool_down_entry(
+                                    scb,
+                                    sfc,
+                                    sdb,
+                                    db2.clone(),
+                                    eah,
+                                    eid,
+                                    entry_locked,
+                                );
                             }
                         });
                         if let Some(reason) = failure_reason {
@@ -1448,7 +1529,8 @@ fn transform_sse_chunk_with_cache(
                         cache_read_tokens.store(usage_tokens.cache_read_tokens, Ordering::Relaxed);
                     }
                     if usage_tokens.cache_write_tokens > 0 {
-                        cache_write_tokens.store(usage_tokens.cache_write_tokens, Ordering::Relaxed);
+                        cache_write_tokens
+                            .store(usage_tokens.cache_write_tokens, Ordering::Relaxed);
                     }
                     if stream_chunk_has_text_delta(&value) {
                         has_text_delta.store(true, Ordering::Relaxed);
@@ -1603,7 +1685,9 @@ fn append_and_parse_sse_with_cache(
 }
 
 fn refresh_tray(app_handle: &Option<tauri::AppHandle>) {
-    if let Some(h) = app_handle { refresh_tray_if_enabled(h); }
+    if let Some(h) = app_handle {
+        refresh_tray_if_enabled(h);
+    }
 }
 
 fn status_matches_rule(rule: &str, status: u16) -> bool {
@@ -1632,12 +1716,17 @@ fn should_disable_entry_for_status(disable_codes: &str, status: u16) -> bool {
 }
 
 async fn disable_entry(state: &ProxyState, entry: &ApiEntry) {
+    if should_skip_entry_circuit_management(entry) {
+        return;
+    }
     let recovery_secs = state.settings.read().await.circuit_recovery_secs.max(1);
     let cooldown_until = chrono::Utc::now().timestamp() + recovery_secs;
 
     let _ = state.db.toggle_entry(&entry.id, false);
     let _ = state.db.set_entry_cooldown(&entry.id, Some(cooldown_until));
-    if let Some(h) = &state.app_handle { let _ = h.emit("entries-changed", ()); }
+    if let Some(h) = &state.app_handle {
+        let _ = h.emit("entries-changed", ());
+    }
     crate::state_version::bump();
     refresh_tray(&state.app_handle);
 
@@ -1645,11 +1734,17 @@ async fn disable_entry(state: &ProxyState, entry: &ApiEntry) {
     breakers.remove(&entry.id);
 }
 
-async fn record_circuit_success(state: &ProxyState, entry_id: &str) {
+async fn clear_entry_cooldown(state: &ProxyState, entry_id: &str) {
     let _ = state.db.set_entry_cooldown(entry_id, None);
-    if let Some(h) = &state.app_handle { let _ = h.emit("entries-changed", ()); }
+    if let Some(h) = &state.app_handle {
+        let _ = h.emit("entries-changed", ());
+    }
     crate::state_version::bump();
     refresh_tray(&state.app_handle);
+}
+
+async fn record_circuit_success(state: &ProxyState, entry_id: &str) {
+    clear_entry_cooldown(state, entry_id).await;
 
     // Clear failure count
     state.failure_counts.write().await.remove(entry_id);
@@ -1664,6 +1759,9 @@ async fn record_circuit_success(state: &ProxyState, entry_id: &str) {
 }
 
 async fn cool_down_entry(state: &ProxyState, entry: &ApiEntry) {
+    if should_skip_entry_circuit_management(entry) {
+        return;
+    }
     let settings = state.settings.read().await.clone();
     let threshold = (settings.circuit_failure_threshold as u32).max(1);
     let recovery_secs = settings.circuit_recovery_secs.max(1);
@@ -1679,9 +1777,13 @@ async fn cool_down_entry(state: &ProxyState, entry: &ApiEntry) {
     // At/above threshold: remove from AUTO and set a 6h long cooldown.
     if current_count >= threshold {
         let six_hours_later = chrono::Utc::now().timestamp() + 21600;
-        let _ = state.db.set_entry_cooldown(&entry.id, Some(six_hours_later));
+        let _ = state
+            .db
+            .set_entry_cooldown(&entry.id, Some(six_hours_later));
         let _ = state.db.toggle_entry(&entry.id, false);
-        if let Some(h) = &state.app_handle { let _ = h.emit("entries-changed", ()); }
+        if let Some(h) = &state.app_handle {
+            let _ = h.emit("entries-changed", ());
+        }
         crate::state_version::bump();
         refresh_tray(&state.app_handle);
 
@@ -1698,7 +1800,9 @@ async fn cool_down_entry(state: &ProxyState, entry: &ApiEntry) {
 
     let cooldown_until = chrono::Utc::now().timestamp() + recovery_secs as i64;
     let _ = state.db.set_entry_cooldown(&entry.id, Some(cooldown_until));
-    if let Some(h) = &state.app_handle { let _ = h.emit("entries-changed", ()); }
+    if let Some(h) = &state.app_handle {
+        let _ = h.emit("entries-changed", ());
+    }
     crate::state_version::bump();
     refresh_tray(&state.app_handle);
 
@@ -1732,7 +1836,9 @@ fn spawn_record_circuit_success(
         let recovery_secs = settings.read().await.circuit_recovery_secs as u64;
 
         let _ = db.set_entry_cooldown(&entry_id, None);
-        if let Some(h) = &app_handle { let _ = h.emit("entries-changed", ()); }
+        if let Some(h) = &app_handle {
+            let _ = h.emit("entries-changed", ());
+        }
         crate::state_version::bump();
         refresh_tray(&app_handle);
 
@@ -1755,7 +1861,11 @@ fn spawn_cool_down_entry(
     db: Arc<Database>,
     app_handle: Option<tauri::AppHandle>,
     entry_id: String,
+    locked: bool,
 ) {
+    if locked {
+        return;
+    }
     tokio::spawn(async move {
         let settings = settings.read().await.clone();
         let threshold = (settings.circuit_failure_threshold as u32).max(1);
@@ -1774,7 +1884,9 @@ fn spawn_cool_down_entry(
             let six_hours_later = chrono::Utc::now().timestamp() + 21600;
             let _ = db.set_entry_cooldown(&entry_id, Some(six_hours_later));
             let _ = db.toggle_entry(&entry_id, false);
-            if let Some(h) = &app_handle { let _ = h.emit("entries-changed", ()); }
+            if let Some(h) = &app_handle {
+                let _ = h.emit("entries-changed", ());
+            }
             crate::state_version::bump();
             refresh_tray(&app_handle);
 
@@ -1791,7 +1903,9 @@ fn spawn_cool_down_entry(
 
         let cooldown_until = chrono::Utc::now().timestamp() + recovery_secs as i64;
         let _ = db.set_entry_cooldown(&entry_id, Some(cooldown_until));
-        if let Some(h) = &app_handle { let _ = h.emit("entries-changed", ()); }
+        if let Some(h) = &app_handle {
+            let _ = h.emit("entries-changed", ());
+        }
         crate::state_version::bump();
         refresh_tray(&app_handle);
 
@@ -1828,6 +1942,8 @@ fn log_usage(
     status_code: i32,
     success: bool,
     error_message: Option<&str>,
+    client_fingerprint: Option<&str>,
+    client_user_agent: Option<&str>,
     attempt_path: Option<&str>,
     stream_end_reason: Option<StreamEndReason>,
 ) {
@@ -1844,6 +1960,8 @@ fn log_usage(
         "success": success,
         "cache_read_tokens": cache_read_tokens,
         "cache_write_tokens": cache_write_tokens,
+        "client_fingerprint": client_fingerprint,
+        "client_user_agent": client_user_agent,
         "attempt_path": attempt_path.and_then(|path| serde_json::from_str::<Value>(path).ok()),
         "stream_end_reason": stream_end_reason.map(StreamEndReason::as_str),
     })
@@ -1876,8 +1994,72 @@ fn log_usage(
         None,
     );
 
-    if let Some(h) = app_handle { let _ = h.emit("new-usage-log", ()); }
+    if let Some(h) = app_handle {
+        let _ = h.emit("new-usage-log", ());
+    }
     crate::state_version::bump();
+}
+
+fn client_user_agent(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn detect_client_fingerprint(headers: &HeaderMap) -> Option<String> {
+    let user_agent = client_user_agent(headers);
+    let stainless_runtime = headers
+        .get("x-stainless-runtime")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty());
+
+    let fingerprint = user_agent
+        .as_deref()
+        .map(classify_client_agent)
+        .or_else(|| stainless_runtime.as_deref().map(classify_client_runtime));
+
+    fingerprint.or_else(|| user_agent.map(|_| "other".to_string()))
+}
+
+fn classify_client_agent(value: &str) -> String {
+    let lower = value.to_ascii_lowercase();
+    if lower.contains("electron") || lower.contains("desktop") || lower.contains("chatgpt") {
+        "desktop".to_string()
+    } else if lower.contains("go-http-client") || lower.contains("golang") || lower.contains("go/") {
+        "go".to_string()
+    } else if lower.contains("node")
+        || lower.contains("undici")
+        || lower.contains("axios")
+        || lower.contains("node-fetch")
+    {
+        "node".to_string()
+    } else if lower.contains("cli")
+        || lower.contains("codex")
+        || lower.contains("claude-code")
+        || lower.contains("claude code")
+        || lower.contains("openai-cli")
+    {
+        "cli".to_string()
+    } else {
+        "other".to_string()
+    }
+}
+
+fn classify_client_runtime(value: &str) -> String {
+    if value.contains("electron") || value.contains("browser") {
+        "desktop".to_string()
+    } else if value.contains("node") {
+        "node".to_string()
+    } else if value.contains("go") {
+        "go".to_string()
+    } else if value.contains("cli") {
+        "cli".to_string()
+    } else {
+        "other".to_string()
+    }
 }
 
 #[cfg(test)]
@@ -1920,51 +2102,21 @@ data: [DONE]\n"
     #[test]
     fn decode_timeout_after_stream_started_suppresses_cooldown_classification() {
         assert!(is_recoverable_decode_timeout_after_stream_started(
-            200,
-            3705,
-            1,
-            218,
-            false,
-            false,
-            0,
-            false,
-            true,
-            true,
-            false,
+            200, 3705, 1, 218, false, false, 0, false, true, true, false,
         ));
     }
 
     #[test]
     fn decode_timeout_before_stream_started_does_not_suppress_cooldown() {
         assert!(!is_recoverable_decode_timeout_after_stream_started(
-            200,
-            0,
-            0,
-            0,
-            false,
-            false,
-            0,
-            false,
-            true,
-            true,
-            false,
+            200, 0, 0, 0, false, false, 0, false, true, true, false,
         ));
     }
 
     #[test]
     fn decode_timeout_with_sse_error_does_not_suppress_cooldown() {
         assert!(!is_recoverable_decode_timeout_after_stream_started(
-            200,
-            1000,
-            1,
-            128,
-            false,
-            false,
-            0,
-            true,
-            true,
-            true,
-            false,
+            200, 1000, 1, 128, false, false, 0, true, true, true, false,
         ));
     }
 
@@ -1972,6 +2124,53 @@ data: [DONE]\n"
     fn dropped_stream_success_only_depends_on_status_code() {
         assert!(is_dropped_stream_success(200, 0, 0));
         assert!(!is_dropped_stream_success(500, 999, 999));
+    }
+
+    #[test]
+    fn normalized_failure_retry_count_never_goes_below_zero() {
+        assert_eq!(normalized_failure_retry_count(-3), 0);
+        assert_eq!(normalized_failure_retry_count(0), 0);
+        assert_eq!(normalized_failure_retry_count(2), 2);
+    }
+
+    #[test]
+    fn per_entry_attempts_counts_initial_attempt_plus_retries() {
+        let mut settings = AppSettings::default();
+        settings.circuit_failure_retry_count = 2;
+        assert_eq!(per_entry_attempts(&settings), 3);
+
+        settings.circuit_failure_retry_count = -5;
+        assert_eq!(per_entry_attempts(&settings), 1);
+    }
+
+    #[test]
+    fn locked_entries_skip_circuit_management() {
+        let mut locked_entry = ApiEntry {
+            id: "locked".to_string(),
+            channel_id: "channel-locked".to_string(),
+            model: "gpt-4o".to_string(),
+            upstream_model: None,
+            display_name: "gpt-4o".to_string(),
+            sort_index: 0,
+            enabled: true,
+            locked: true,
+            cooldown_until: None,
+            circuit_state: "closed".to_string(),
+            created_at: 0,
+            updated_at: 0,
+            channel_name: None,
+            channel_api_type: None,
+            owned_by: None,
+            response_ms: None,
+            provider_logo: None,
+            release_date: None,
+            model_meta_zh: None,
+            model_meta_en: None,
+            group_name: None,
+        };
+        assert!(should_skip_entry_circuit_management(&locked_entry));
+        locked_entry.locked = false;
+        assert!(!should_skip_entry_circuit_management(&locked_entry));
     }
 
     #[test]

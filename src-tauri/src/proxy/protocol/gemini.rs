@@ -833,13 +833,16 @@ fn openai_sse_chunk_to_gemini(data_line: &str) -> Option<String> {
             }
             if let Some(fr) = choice.get("finish_reason").and_then(|f| f.as_str()) {
                 if !fr.is_empty() && fr != "null" {
-                    finish_reason = Some(match fr {
-                        "stop" => "STOP",
-                        "length" => "MAX_TOKENS",
-                        "content_filter" => "SAFETY",
-                        "tool_calls" => "TOOL_CALLS",
-                        other => other,
-                    }.to_string());
+                    finish_reason = Some(
+                        match fr {
+                            "stop" => "STOP",
+                            "length" => "MAX_TOKENS",
+                            "content_filter" => "SAFETY",
+                            "tool_calls" => "TOOL_CALLS",
+                            other => other,
+                        }
+                        .to_string(),
+                    );
                 }
             }
         }
@@ -862,8 +865,14 @@ fn openai_sse_chunk_to_gemini(data_line: &str) -> Option<String> {
 
     // 最后一个 chunk 可能携带 usage 信息
     if let Some(usage) = value.get("usage") {
-        let prompt = usage.get("prompt_tokens").and_then(Value::as_i64).unwrap_or(0);
-        let completion = usage.get("completion_tokens").and_then(Value::as_i64).unwrap_or(0);
+        let prompt = usage
+            .get("prompt_tokens")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let completion = usage
+            .get("completion_tokens")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
         gemini_chunk["usageMetadata"] = json!({
             "promptTokenCount": prompt,
             "candidatesTokenCount": completion,
@@ -896,7 +905,9 @@ pub fn transform_openai_sse_to_gemini_stream(
         |(mut stream, mut sse_buffer, mut sse_utf8_remainder, mut streamed_bytes)| async move {
             loop {
                 if crate::proxy::sse::stream_buffer_exceeded(
-                    &sse_buffer, &sse_utf8_remainder, streamed_bytes,
+                    &sse_buffer,
+                    &sse_utf8_remainder,
+                    streamed_bytes,
                 ) {
                     return Some((
                         Err::<Bytes, std::io::Error>(std::io::Error::new(
@@ -941,8 +952,12 @@ pub fn transform_openai_sse_to_gemini_stream(
 
                 if let Some(line_end) = sse_buffer.find('\n') {
                     let mut line = sse_buffer.drain(..=line_end).collect::<String>();
-                    if line.ends_with('\n') { line.pop(); }
-                    if line.ends_with('\r') { line.pop(); }
+                    if line.ends_with('\n') {
+                        line.pop();
+                    }
+                    if line.ends_with('\r') {
+                        line.pop();
+                    }
 
                     if let Some(payload) = line.strip_prefix("data: ") {
                         if payload == "[DONE]" {
@@ -1169,7 +1184,8 @@ mod tests {
 
     #[test]
     fn openai_sse_chunk_finish_reason_content_filter() {
-        let line = r#"{"id":"5","choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}]}"#;
+        let line =
+            r#"{"id":"5","choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}]}"#;
         let result = openai_sse_chunk_to_gemini(line).unwrap();
         let v: Value = serde_json::from_str(&result).unwrap();
         assert_eq!(v["candidates"][0]["finishReason"], "SAFETY");

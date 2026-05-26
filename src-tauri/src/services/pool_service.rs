@@ -2,7 +2,9 @@ use crate::database::dao::PaginatedResult;
 use crate::database::{ApiEntry, Database, EntryCatalogMetaInput};
 use crate::error::AppError;
 use crate::proxy::protocol::get_adapter;
-use crate::services::log_service::{extract_usage_tokens, insert_test_usage_log, TestUsageLogInput};
+use crate::services::log_service::{
+    extract_usage_tokens, insert_test_usage_log, TestUsageLogInput,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::Instant;
@@ -199,7 +201,9 @@ pub async fn test_entry_latency(
         Err(e) => {
             let message = format!("HTTP client: {e}");
             let _ = db.update_entry_response_ms(entry_id, "X");
-            let _ = db.toggle_entry(entry_id, false);
+            if !entry.locked {
+                let _ = db.toggle_entry(entry_id, false);
+            }
             insert_test_usage_log(
                 db,
                 None,
@@ -234,7 +238,9 @@ pub async fn test_entry_latency(
             let latency_ms = start.elapsed().as_millis() as i64;
             let message = format!("network_error: {e}");
             let _ = db.update_entry_response_ms(entry_id, "X");
-            let _ = db.toggle_entry(entry_id, false);
+            if !entry.locked {
+                let _ = db.toggle_entry(entry_id, false);
+            }
             insert_test_usage_log(
                 db,
                 None,
@@ -275,7 +281,9 @@ pub async fn test_entry_latency(
             format!("http_{}: {}", status.as_u16(), error_preview)
         };
         let _ = db.update_entry_response_ms(entry_id, "X");
-        let _ = db.toggle_entry(entry_id, false);
+        if !entry.locked {
+            let _ = db.toggle_entry(entry_id, false);
+        }
         insert_test_usage_log(
             db,
             None,
@@ -302,13 +310,14 @@ pub async fn test_entry_latency(
         });
     }
 
-
     let body = match response.text().await {
         Ok(body) => body,
         Err(e) => {
             let message = format!("response_read_error: {e}");
             let _ = db.update_entry_response_ms(entry_id, "X");
-            let _ = db.toggle_entry(entry_id, false);
+            if !entry.locked {
+                let _ = db.toggle_entry(entry_id, false);
+            }
             insert_test_usage_log(
                 db,
                 None,
@@ -338,7 +347,9 @@ pub async fn test_entry_latency(
 
     if body.trim().is_empty() {
         let _ = db.update_entry_response_ms(entry_id, "X");
-        let _ = db.toggle_entry(entry_id, false);
+        if !entry.locked {
+            let _ = db.toggle_entry(entry_id, false);
+        }
         insert_test_usage_log(
             db,
             None,
@@ -374,6 +385,8 @@ pub async fn test_entry_latency(
     let response_ms = latency_ms.to_string();
     db.update_entry_response_ms(entry_id, &response_ms)?;
     // 启用 entry 并清理冷却，确保后续自动路由能命中
+    // 启用 entry 并清理冷却，确保后续自动路由可用。
+    db.toggle_entry(entry_id, true)?;
     db.toggle_entry(entry_id, true)?;
     let _ = db.set_entry_cooldown(entry_id, None);
     insert_test_usage_log(
@@ -395,7 +408,6 @@ pub async fn test_entry_latency(
             error_preview: None,
         },
     );
-
 
     Ok(TestLatencyResult {
         status: "ok".to_string(),
@@ -425,6 +437,10 @@ pub fn update_entry_group(db: &Database, id: &str, group_name: &str) -> Result<(
 
 pub fn update_entry_model(db: &Database, id: &str, model: &str) -> Result<(), AppError> {
     db.update_entry_model(id, model)
+}
+
+pub fn update_entry_locked(db: &Database, id: &str, locked: bool) -> Result<(), AppError> {
+    db.update_entry_locked(id, locked)
 }
 
 pub fn update_entry_upstream_model(

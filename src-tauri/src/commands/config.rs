@@ -30,7 +30,7 @@ async fn restart_proxy_if_running(
         settings.listen_port,
         state.db.clone(),
         state.settings.clone(),
-Some(app.clone()),
+        Some(app.clone()),
         state.failure_counts.clone(),
     );
     if let Err(error) = new_server.start_with_admin(admin_router).await {

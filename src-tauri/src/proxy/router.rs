@@ -82,9 +82,11 @@ fn available_entries(
 ) -> Vec<ApiEntry> {
     let mut available: Vec<ApiEntry> = entries
         .iter()
-        .filter(|e| e.enabled && is_not_cooled_down(e))
+        .filter(|e| e.enabled && (e.locked || is_not_cooled_down(e)))
         .filter(|e| {
-            if let Some(cb) = breakers.get(&e.id) {
+            if e.locked {
+                true
+            } else if let Some(cb) = breakers.get(&e.id) {
                 cb.is_available()
             } else {
                 true
@@ -94,6 +96,14 @@ fn available_entries(
         .collect();
     sort_by_index(&mut available);
     available
+}
+
+fn prefer_locked_entries(entries: Vec<ApiEntry>) -> Vec<ApiEntry> {
+    if let Some(locked_entry) = entries.iter().find(|entry| entry.locked).cloned() {
+        vec![locked_entry]
+    } else {
+        entries
+    }
 }
 
 /// Resolve which entries to try for a given model request.
@@ -141,7 +151,7 @@ pub async fn resolve(
         .cloned()
         .collect();
     if !exact_model_matches.is_empty() {
-        return exact_model_matches;
+        return prefer_locked_entries(exact_model_matches);
     }
 
     // 2.7 Exact alias (display_name) match (case-insensitive)
@@ -154,7 +164,7 @@ pub async fn resolve(
         .cloned()
         .collect();
     if !alias_matches.is_empty() {
-        return alias_matches;
+        return prefer_locked_entries(alias_matches);
     }
 
     let model_matches: Vec<ApiEntry> = all_available
@@ -168,7 +178,7 @@ pub async fn resolve(
         .cloned()
         .collect();
     if !model_matches.is_empty() {
-        return model_matches;
+        return prefer_locked_entries(model_matches);
     }
 
     let auto_available = available_entries(auto_entries, &breakers);
@@ -206,6 +216,7 @@ mod tests {
             display_name: model.to_string(),
             sort_index,
             enabled,
+            locked: false,
             cooldown_until: None,
             circuit_state: "closed".to_string(),
             created_at: 0,
@@ -335,6 +346,22 @@ mod tests {
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].model, "client-model");
         assert_eq!(resolved[0].upstream_model(), "provider-real-model");
+    }
+
+    #[tokio::test]
+    async fn locked_entry_wins_over_unlocked_same_model_entries() {
+        let breakers = RwLock::new(HashMap::new());
+        let mut locked = entry("locked", "gpt-4o", true, 0);
+        locked.locked = true;
+        let unlocked = entry("unlocked", "gpt-4o", true, 1);
+        let all = vec![locked.clone(), unlocked];
+
+        let resolved = resolve("gpt-4o", &all, &all, &breakers, "custom").await;
+
+        assert_eq!(
+            resolved.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+            vec![locked.id.as_str()]
+        );
     }
 
     #[test]

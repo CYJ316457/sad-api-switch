@@ -97,6 +97,13 @@ export const SETTINGS_TRANSLATION_SCHEMA: TranslationPageSchema = {
           visibility: 'visible',
         },
         {
+          key: 'circuit_failure_retry_count',
+          labelKey: 'settings.circuit.failureRetryCount',
+          control: 'number',
+          translationMode: 'full',
+          visibility: 'visible',
+        },
+        {
           key: 'proxy_connect_timeout_secs',
           labelKey: 'settings.circuit.connectTimeout',
           control: 'number',

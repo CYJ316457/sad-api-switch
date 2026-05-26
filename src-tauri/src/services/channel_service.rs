@@ -282,8 +282,9 @@ pub async fn probe_url(url: String, use_system_proxy: bool) -> Result<ProbeResul
             )),
         });
     }
-    let client = crate::http_client::channel_client(use_system_proxy, std::time::Duration::from_secs(10))
-        .map_err(|e| AppError::Network(format!("HTTP client: {e}")))?;
+    let client =
+        crate::http_client::channel_client(use_system_proxy, std::time::Duration::from_secs(10))
+            .map_err(|e| AppError::Network(format!("HTTP client: {e}")))?;
 
     let start = std::time::Instant::now();
     match client.head(url).send().await {
@@ -366,8 +367,8 @@ pub async fn fetch_models_direct(
         verified.unwrap_or(false),
         use_system_proxy.unwrap_or(false),
     )
-        .await
-        .map_err(|e| AppError::Network(e.message))
+    .await
+    .map_err(|e| AppError::Network(e.message))
 }
 
 pub async fn fetch_models(
@@ -375,15 +376,19 @@ pub async fn fetch_models(
     channel_id: String,
 ) -> Result<FetchModelsResult, AppError> {
     let channel = db.get_channel(&channel_id)?;
+    if !channel.enabled {
+        return Err(AppError::Validation(
+            "Channel is disabled. Enable it before fetching models.".to_string(),
+        ));
+    }
     let original_base_url = normalize_base_url(&channel.base_url);
-    let endpoint_guess =
-        detect_endpoint_guess(
-            &channel.api_type,
-            &channel.base_url,
-            &channel.api_key,
-            channel.use_system_proxy,
-        )
-        .await;
+    let endpoint_guess = detect_endpoint_guess(
+        &channel.api_type,
+        &channel.base_url,
+        &channel.api_key,
+        channel.use_system_proxy,
+    )
+    .await;
     let Some(guess) = endpoint_guess else {
         return Ok(FetchModelsResult {
             detected_type: channel.api_type,
@@ -503,14 +508,13 @@ async fn smart_fetch_models(
         .map(|g| g.corrected_base_url.as_str())
         .unwrap_or(base_url.as_str());
 
-    let (models, actual_type, actual_base_url) =
-        fetch_models_result_with_fallback(
-            fetch_seed_type,
-            fetch_seed_base_url,
-            api_key,
-            use_system_proxy,
-        )
-        .await?;
+    let (models, actual_type, actual_base_url) = fetch_models_result_with_fallback(
+        fetch_seed_type,
+        fetch_seed_base_url,
+        api_key,
+        use_system_proxy,
+    )
+    .await?;
 
     let corrected_type = endpoint_guess
         .as_ref()

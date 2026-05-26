@@ -1,4 +1,4 @@
-﻿//! POST /v1/responses — OpenAI Responses API compatibility layer.
+//! POST /v1/responses — OpenAI Responses API compatibility layer.
 //!
 //! Converts a subset of Responses API requests (text and function tools)
 //! to Chat Completions format. Non-streaming responses are returned as
@@ -345,8 +345,8 @@ pub async fn cancel_response(
 mod tests {
     use super::*;
     use crate::proxy::protocol::responses::{
-        convert_tools, passthrough_output_item, responses_to_openai_chat_request,
-        responses_hosted_tool_types_for_chat_fallback, responses_hosted_tools_degradation_prompt,
+        convert_tools, passthrough_output_item, responses_hosted_tool_types_for_chat_fallback,
+        responses_hosted_tools_degradation_prompt, responses_to_openai_chat_request,
     };
 
     // ── Tool Type Tests ──
@@ -494,7 +494,10 @@ mod tests {
         ];
 
         let types = responses_hosted_tool_types_for_chat_fallback(&tools);
-        assert_eq!(types, vec!["web_search".to_string(), "file_search".to_string()]);
+        assert_eq!(
+            types,
+            vec!["web_search".to_string(), "file_search".to_string()]
+        );
     }
 
     #[test]

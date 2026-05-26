@@ -175,7 +175,10 @@ pub async fn delete_channel(
 }
 
 #[tauri::command]
-pub async fn probe_url(url: String, use_system_proxy: Option<bool>) -> Result<ProbeResult, AppError> {
+pub async fn probe_url(
+    url: String,
+    use_system_proxy: Option<bool>,
+) -> Result<ProbeResult, AppError> {
     channel_service::probe_url(url, use_system_proxy.unwrap_or(false)).await
 }
 
@@ -204,10 +207,9 @@ pub async fn test_channel(
     .await;
 
     if result.success && result.status_code == Some(200) {
-        let _ =
-            state
-                .db
-                .update_channel_response_ms(&channel_id, &result.latency_ms.to_string());
+        let _ = state
+            .db
+            .update_channel_response_ms(&channel_id, &result.latency_ms.to_string());
         let _ = channel_service::update_channel(
             &state.db,
             Some(&app),
@@ -240,7 +242,8 @@ pub async fn fetch_models_direct(
     verified: Option<bool>,
     use_system_proxy: Option<bool>,
 ) -> Result<FetchModelsResult, AppError> {
-    channel_service::fetch_models_direct(api_type, base_url, api_key, verified, use_system_proxy).await
+    channel_service::fetch_models_direct(api_type, base_url, api_key, verified, use_system_proxy)
+        .await
 }
 
 #[tauri::command]

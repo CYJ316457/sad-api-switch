@@ -33,6 +33,7 @@ pub fn create_tables(conn: &Connection) -> Result<(), AppError> {
             display_name TEXT NOT NULL,
             sort_index INTEGER DEFAULT 0,
             enabled INTEGER DEFAULT 1,
+            locked INTEGER DEFAULT 0,
             cooldown_until INTEGER,
             response_ms TEXT DEFAULT '',
             provider_logo TEXT DEFAULT '',
@@ -152,6 +153,7 @@ pub fn create_tables(conn: &Connection) -> Result<(), AppError> {
         ("lan_share_enabled", "0"),
         ("access_key_required", "0"),
         ("circuit_failure_threshold", "5"),
+        ("circuit_failure_retry_count", "2"),
         ("proxy_connect_timeout_secs", "30"),
         ("circuit_recovery_secs", "300"),
         ("circuit_disable_codes", "401,403,410"),
@@ -203,6 +205,7 @@ pub fn create_tables(conn: &Connection) -> Result<(), AppError> {
 
 fn ensure_api_entry_columns(conn: &Connection) -> Result<(), AppError> {
     ensure_column(conn, "api_entries", "cooldown_until", "INTEGER")?;
+    ensure_column(conn, "api_entries", "locked", "INTEGER DEFAULT 0")?;
     ensure_column(conn, "api_entries", "response_ms", "TEXT DEFAULT ''")?;
     ensure_column(conn, "api_entries", "provider_logo", "TEXT DEFAULT ''")?;
     ensure_column(conn, "api_entries", "release_date", "TEXT DEFAULT ''")?;

@@ -52,9 +52,12 @@ fn mark_entry_unavailable(
     db: &Database,
     app: &tauri::AppHandle,
     entry_id: &str,
+    locked: bool,
 ) -> Result<(), AppError> {
     db.update_entry_response_ms(entry_id, "X")?;
-    db.toggle_entry(entry_id, false)?;
+    if !locked {
+        db.toggle_entry(entry_id, false)?;
+    }
     refresh_entries(app);
     Ok(())
 }
@@ -128,7 +131,7 @@ pub async fn test_chat(
                     error_preview: None,
                 },
             );
-            mark_entry_unavailable(&db, &app, &entry.id)?;
+            mark_entry_unavailable(&db, &app, &entry.id, entry.locked)?;
             return Err(AppError::Network(message));
         }
     };
@@ -159,7 +162,7 @@ pub async fn test_chat(
                 error_preview: Some(&body),
             },
         );
-        mark_entry_unavailable(&db, &app, &entry.id)?;
+        mark_entry_unavailable(&db, &app, &entry.id, entry.locked)?;
         return Err(AppError::Proxy(error_message));
     }
 
@@ -188,7 +191,7 @@ pub async fn test_chat(
                     error_preview: None,
                 },
             );
-            mark_entry_unavailable(&db, &app, &entry.id)?;
+            mark_entry_unavailable(&db, &app, &entry.id, entry.locked)?;
             return Err(AppError::Internal(message));
         }
     };
@@ -228,7 +231,7 @@ pub async fn test_chat(
                 error_preview: None,
             },
         );
-        mark_entry_unavailable(&db, &app, &entry.id)?;
+        mark_entry_unavailable(&db, &app, &entry.id, entry.locked)?;
         return Err(AppError::Internal(message.to_string()));
     }
 

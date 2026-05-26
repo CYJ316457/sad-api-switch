@@ -79,11 +79,7 @@ impl Database {
         let page_size = page_size.max(1).min(100);
         let offset = i64::from(page.saturating_sub(1)) * i64::from(page_size);
 
-        let total: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM channels",
-            [],
-            |row| row.get(0),
-        )?;
+        let total: i64 = conn.query_row("SELECT COUNT(*) FROM channels", [], |row| row.get(0))?;
 
         let mut stmt = conn.prepare(
             "SELECT id, name, api_type, base_url, api_key, available_models, selected_models,
