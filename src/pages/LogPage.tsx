@@ -1,7 +1,7 @@
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Fingerprint } from "lucide-react";
+import { Fingerprint, RotateCcw } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { useEvent } from "@/lib/events";
@@ -26,6 +26,43 @@ interface UsageLogMeta {
   }>;
   stream_end_reason?: string;
 }
+
+type LogColumnKey =
+  | "time"
+  | "channel"
+  | "token"
+  | "model"
+  | "duration"
+  | "prompt"
+  | "completion"
+  | "status"
+  | "fingerprint";
+
+type LogColumnWidths = Record<LogColumnKey, number>;
+
+const LOG_COLUMN_STORAGE_KEY = "api-switch.log-column-widths";
+const DEFAULT_COLUMN_WIDTHS: LogColumnWidths = {
+  time: 160,
+  channel: 80,
+  token: 56,
+  model: 96,
+  duration: 64,
+  prompt: 176,
+  completion: 64,
+  status: 64,
+  fingerprint: 96,
+};
+const MIN_COLUMN_WIDTHS: LogColumnWidths = {
+  time: 140,
+  channel: 72,
+  token: 52,
+  model: 72,
+  duration: 64,
+  prompt: 120,
+  completion: 64,
+  status: 56,
+  fingerprint: 72,
+};
 
 function parseUsageLogMeta(other: string | null | undefined): UsageLogMeta | null {
   if (!other) return null;
@@ -57,6 +94,61 @@ function shortTokenName(log: { token_name?: string; access_key_name?: string }):
   return value.length > 5 ? value.slice(0, 5) : value;
 }
 
+function readStoredColumnWidths(): LogColumnWidths {
+  if (typeof window === "undefined") return DEFAULT_COLUMN_WIDTHS;
+  try {
+    const raw = window.localStorage.getItem(LOG_COLUMN_STORAGE_KEY);
+    if (!raw) return DEFAULT_COLUMN_WIDTHS;
+    const parsed = JSON.parse(raw) as Partial<LogColumnWidths>;
+    return {
+      ...DEFAULT_COLUMN_WIDTHS,
+      ...Object.fromEntries(
+        Object.entries(parsed || {}).map(([key, value]) => [
+          key,
+          typeof value === "number" && Number.isFinite(value)
+            ? Math.max(MIN_COLUMN_WIDTHS[key as LogColumnKey], Math.round(value))
+            : DEFAULT_COLUMN_WIDTHS[key as LogColumnKey],
+        ]),
+      ),
+    } as LogColumnWidths;
+  } catch {
+    return DEFAULT_COLUMN_WIDTHS;
+  }
+}
+
+function ColumnHeader({
+  children,
+  width,
+  onResizeStart,
+  className = "",
+  canResize = true,
+}: {
+  children: React.ReactNode;
+  width: number;
+  onResizeStart: (event: React.MouseEvent<HTMLDivElement>) => void;
+  className?: string;
+  canResize?: boolean;
+}) {
+  return (
+    <th className={`relative px-3 py-2 text-left font-medium ${className}`.trim()}>
+      <div className="truncate pr-2">{children}</div>
+      {canResize ? (
+        <div
+          className="absolute right-0 top-0 h-full w-2 cursor-col-resize select-none touch-none"
+          onMouseDown={onResizeStart}
+          title="拖拽调整列宽"
+        >
+          <div className="mx-auto h-full w-px bg-border/70 transition-colors hover:bg-foreground/40" />
+        </div>
+      ) : null}
+      <div
+        className="pointer-events-none absolute bottom-0 left-0 h-0.5 bg-border/60"
+        style={{ width }}
+      />
+    </th>
+  );
+}
+
 export function LogPage() {
   const { t } = useTranslation();
   const api = useApiAdapter();
@@ -64,10 +156,70 @@ export function LogPage() {
   const [filter, setFilter] = useState<UsageLogFilter>({ page: 1, page_size: 100 });
   const [errorsOnly, setErrorsOnly] = useState(false);
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [columnWidths, setColumnWidths] = useState<LogColumnWidths>(() =>
+    readStoredColumnWidths(),
+  );
+  const [resizing, setResizing] = useState<{
+    key: LogColumnKey;
+    startX: number;
+    startWidth: number;
+  } | null>(null);
 
   useEvent("new-usage-log", () => {
     queryClient.invalidateQueries({ queryKey: ["usageLogs"] });
   });
+
+  useEffect(() => {
+    window.localStorage.setItem(LOG_COLUMN_STORAGE_KEY, JSON.stringify(columnWidths));
+  }, [columnWidths]);
+
+  useEffect(() => {
+    if (!resizing) return;
+
+    const onMouseMove = (event: MouseEvent) => {
+      const delta = event.clientX - resizing.startX;
+      const nextWidth = Math.max(
+        MIN_COLUMN_WIDTHS[resizing.key],
+        Math.round(resizing.startWidth + delta),
+      );
+      setColumnWidths((current) => {
+        if (current[resizing.key] === nextWidth) return current;
+        return { ...current, [resizing.key]: nextWidth };
+      });
+    };
+
+    const onMouseUp = () => {
+      setResizing(null);
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    };
+  }, [resizing]);
+
+  const startResize =
+    (key: LogColumnKey) => (event: React.MouseEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setResizing({ key, startX: event.clientX, startWidth: columnWidths[key] });
+    };
+
+  const resetColumnWidths = () => {
+    setColumnWidths(DEFAULT_COLUMN_WIDTHS);
+  };
+
+  const tableMinWidth = useMemo(
+    () => Object.values(columnWidths).reduce((sum, width) => sum + width, 0),
+    [columnWidths],
+  );
 
   const { data: result, isLoading } = useQuery({
     queryKey: ["usageLogs", filter],
@@ -117,18 +269,18 @@ export function LogPage() {
           ))}
         </div>
 
-        <div className="overflow-x-hidden rounded-md border">
-          <table className="w-full table-fixed text-sm">
+        <div className="overflow-x-auto rounded-md border">
+          <table className="w-full table-fixed text-sm" style={{ minWidth: `${tableMinWidth}px` }}>
             <colgroup>
-              <col className="w-40" />
-              <col className="w-28" />
-              <col className="w-24" />
-              <col />
-              <col className="w-28" />
-              <col className="w-16" />
-              <col className="w-16" />
-              <col className="w-20" />
-              <col className="w-24" />
+              <col style={{ width: `${columnWidths.time}px` }} />
+              <col style={{ width: `${columnWidths.channel}px` }} />
+              <col style={{ width: `${columnWidths.token}px` }} />
+              <col style={{ width: `${columnWidths.model}px` }} />
+              <col style={{ width: `${columnWidths.duration}px` }} />
+              <col style={{ width: `${columnWidths.prompt}px` }} />
+              <col style={{ width: `${columnWidths.completion}px` }} />
+              <col style={{ width: `${columnWidths.status}px` }} />
+              <col style={{ width: `${columnWidths.fingerprint}px` }} />
             </colgroup>
             <thead>
               <tr className="border-b bg-muted/50">
@@ -150,7 +302,7 @@ export function LogPage() {
                   <td className="min-w-0 px-3 py-2"><div className="h-4 w-20 animate-pulse rounded bg-muted" /></td>
                   <td className="min-w-0 px-3 py-2"><div className="h-4 w-16 animate-pulse rounded bg-muted" /></td>
                   <td className="min-w-0 px-3 py-2 font-mono text-xs"><div className="h-4 w-24 animate-pulse rounded bg-muted" /></td>
-                  <td className="whitespace-nowrap px-3 py-2"><div className="h-4 w-28 animate-pulse rounded bg-muted" /></td>
+                  <td className="whitespace-nowrap px-3 py-2"><div className="h-4 w-20 animate-pulse rounded bg-muted" /></td>
                   <td className="px-3 py-2 text-right"><div className="ml-auto h-4 w-10 animate-pulse rounded bg-muted" /></td>
                   <td className="px-3 py-2 text-right"><div className="ml-auto h-4 w-10 animate-pulse rounded bg-muted" /></td>
                   <td className="whitespace-nowrap px-3 py-2"><div className="h-4 w-12 animate-pulse rounded bg-muted" /></td>
@@ -175,9 +327,17 @@ export function LogPage() {
 
   return (
     <div className="p-6">
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex items-center justify-between gap-3">
         <h1 className="text-xl font-semibold">{t("log.title")}</h1>
         <div className="flex items-center gap-2 text-sm">
+          <button
+            type="button"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border bg-background text-muted-foreground transition-colors hover:text-foreground"
+            onClick={resetColumnWidths}
+            title="恢复默认列宽"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+          </button>
           <span className="text-muted-foreground">{t("log.all")}</span>
           <Switch checked={errorsOnly} onCheckedChange={toggleErrorsOnly} />
           <span className="text-muted-foreground">{t("log.failed")}</span>
@@ -220,30 +380,30 @@ export function LogPage() {
         </Card>
       </div>
 
-      <div className="overflow-x-hidden rounded-md border">
-        <table className="w-full table-fixed text-sm">
+      <div className="overflow-x-auto rounded-md border">
+        <table className="w-full table-fixed text-sm" style={{ minWidth: `${tableMinWidth}px` }}>
           <colgroup>
-            <col className="w-40" />
-            <col className="w-20" />
-            <col className="w-14" />
-            <col className="w-32" />
-            <col className="w-20" />
-            <col className="w-36" />
-            <col className="w-16" />
-            <col className="w-20" />
-            <col className="w-24" />
+            <col style={{ width: `${columnWidths.time}px` }} />
+            <col style={{ width: `${columnWidths.channel}px` }} />
+            <col style={{ width: `${columnWidths.token}px` }} />
+            <col style={{ width: `${columnWidths.model}px` }} />
+            <col style={{ width: `${columnWidths.duration}px` }} />
+            <col style={{ width: `${columnWidths.prompt}px` }} />
+            <col style={{ width: `${columnWidths.completion}px` }} />
+            <col style={{ width: `${columnWidths.status}px` }} />
+            <col style={{ width: `${columnWidths.fingerprint}px` }} />
           </colgroup>
           <thead>
             <tr className="border-b bg-muted/50">
-              <th className="whitespace-nowrap px-3 py-2 text-left font-medium">{t("log.time")}</th>
-              <th className="truncate px-3 py-2 text-left font-medium">{t("log.channel")}</th>
-              <th className="truncate px-3 py-2 text-left font-medium">{t("log.token")}</th>
-              <th className="truncate px-3 py-2 text-left font-medium">{t("log.model")}</th>
-              <th className="whitespace-nowrap px-3 py-2 text-left font-medium">{t("log.duration")}</th>
-              <th className="px-3 py-2 text-right font-medium">{t("log.promptTokens")}</th>
-              <th className="px-3 py-2 text-right font-medium">{t("log.completionTokens")}</th>
-              <th className="whitespace-nowrap px-3 py-2 text-left font-medium">{t("log.status")}</th>
-              <th className="whitespace-nowrap px-3 py-2 text-left font-medium">{t("log.fingerprint")}</th>
+              <ColumnHeader width={columnWidths.time} onResizeStart={startResize("time")} className="whitespace-nowrap">{t("log.time")}</ColumnHeader>
+              <ColumnHeader width={columnWidths.channel} onResizeStart={startResize("channel")} className="truncate">{t("log.channel")}</ColumnHeader>
+              <ColumnHeader width={columnWidths.token} onResizeStart={startResize("token")} className="truncate">{t("log.token")}</ColumnHeader>
+              <ColumnHeader width={columnWidths.model} onResizeStart={startResize("model")} className="truncate">{t("log.model")}</ColumnHeader>
+              <ColumnHeader width={columnWidths.duration} onResizeStart={startResize("duration")} className="whitespace-nowrap">{t("log.duration")}</ColumnHeader>
+              <ColumnHeader width={columnWidths.prompt} onResizeStart={startResize("prompt")} className="text-right">{t("log.promptTokens")}</ColumnHeader>
+              <ColumnHeader width={columnWidths.completion} onResizeStart={startResize("completion")} className="text-right">{t("log.completionTokens")}</ColumnHeader>
+              <ColumnHeader width={columnWidths.status} onResizeStart={startResize("status")} className="whitespace-nowrap">{t("log.status")}</ColumnHeader>
+              <ColumnHeader width={columnWidths.fingerprint} onResizeStart={startResize("fingerprint")} className="whitespace-nowrap">{t("log.fingerprint")}</ColumnHeader>
             </tr>
           </thead>
           <tbody>
