@@ -1,4 +1,5 @@
 pub mod admin_cmd;
+pub mod backup;
 pub mod channel;
 pub mod cli;
 pub mod config;

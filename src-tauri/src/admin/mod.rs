@@ -1,4 +1,5 @@
-mod auth;
+﻿mod auth;
+mod backup_handlers;
 mod channel_handlers;
 mod chat_handlers;
 mod cors;

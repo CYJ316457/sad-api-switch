@@ -1,4 +1,4 @@
-use super::circuit_breaker::CircuitBreaker;
+﻿use super::circuit_breaker::CircuitBreaker;
 use super::handlers::ProxyError;
 use super::middleware::{CallerKind, RequestContext};
 use super::protocol::get_adapter;
@@ -341,6 +341,7 @@ struct ForwardResult {
     completion_tokens: i64,
     cache_read_tokens: i64,
     cache_write_tokens: i64,
+    reasoning_tokens: i64,
     first_token_ms: i64,
     status_code: i32,
 }
@@ -351,6 +352,14 @@ struct UsageTokens {
     completion_tokens: i64,
     cache_read_tokens: i64,
     cache_write_tokens: i64,
+    reasoning_tokens: i64,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ReasoningMeta {
+    effort: Option<String>,
+    source: Option<&'static str>,
+    budget_tokens: Option<i64>,
 }
 
 /// StreamLogGuard: safety net for writing usage log when stream is dropped
@@ -367,6 +376,8 @@ struct StreamLogGuard {
     completion_tokens: Arc<AtomicI64>,
     cache_read_tokens: Arc<AtomicI64>,
     cache_write_tokens: Arc<AtomicI64>,
+    reasoning_tokens: Arc<AtomicI64>,
+    reasoning_meta: ReasoningMeta,
     first_token_ms: Arc<AtomicI64>,
     chunk_count: Arc<AtomicI64>,
     streamed_bytes: Arc<AtomicI64>,
@@ -386,6 +397,7 @@ impl Drop for StreamLogGuard {
             let completion_tokens = self.completion_tokens.load(Ordering::SeqCst);
             let cache_read_tokens = self.cache_read_tokens.load(Ordering::SeqCst);
             let cache_write_tokens = self.cache_write_tokens.load(Ordering::SeqCst);
+            let reasoning_tokens = self.reasoning_tokens.load(Ordering::SeqCst);
             let chunk_total = self.chunk_count.load(Ordering::SeqCst);
             let byte_total = self.streamed_bytes.load(Ordering::SeqCst);
             let first_token_ms = self.first_token_ms.load(Ordering::SeqCst);
@@ -426,6 +438,7 @@ impl Drop for StreamLogGuard {
             let status_code = self.status_code;
             let client_fingerprint = self.client_fingerprint.clone();
             let client_user_agent = self.client_user_agent.clone();
+            let reasoning_meta = self.reasoning_meta.clone();
             tokio::spawn(async move {
                 log_usage(
                     &db,
@@ -438,6 +451,8 @@ impl Drop for StreamLogGuard {
                     completion_tokens,
                     cache_read_tokens,
                     cache_write_tokens,
+                    reasoning_tokens,
+                    &reasoning_meta,
                     first_token_ms,
                     latency_ms,
                     status_code,
@@ -474,6 +489,7 @@ pub async fn forward_with_retry(
     let mut attempts: Vec<AttemptInfo> = Vec::new();
     let client_fingerprint = detect_client_fingerprint(original_headers);
     let client_user_agent = client_user_agent(original_headers);
+    let reasoning_meta = extract_reasoning_meta(body);
 
     for entry in entries {
         // Check circuit breaker
@@ -527,6 +543,8 @@ pub async fn forward_with_retry(
                             result.completion_tokens,
                             result.cache_read_tokens,
                             result.cache_write_tokens,
+                            result.reasoning_tokens,
+                            &reasoning_meta,
                             result.first_token_ms,
                             latency_ms,
                             result.status_code,
@@ -568,6 +586,8 @@ pub async fn forward_with_retry(
                         0,
                         0,
                         0,
+                        0,
+                        &reasoning_meta,
                         0,
                         latency_ms,
                         log_status,
@@ -708,6 +728,7 @@ async fn forward_single(
             request_start,
             prior_attempts,
             append_model_info,
+            extract_reasoning_meta(body),
             middleware,
             &ctx,
         );
@@ -717,6 +738,7 @@ async fn forward_single(
             completion_tokens: 0,
             cache_read_tokens: 0,
             cache_write_tokens: 0,
+            reasoning_tokens: 0,
             first_token_ms: 0,
             status_code,
         })
@@ -738,6 +760,7 @@ async fn forward_single(
             completion_tokens: usage_tokens.completion_tokens,
             cache_read_tokens: usage_tokens.cache_read_tokens,
             cache_write_tokens: usage_tokens.cache_write_tokens,
+            reasoning_tokens: usage_tokens.reasoning_tokens,
             first_token_ms: 0,
             status_code,
         })
@@ -762,12 +785,65 @@ fn extract_usage_tokens(body: &Value) -> UsageTokens {
     let cache_write_tokens =
         usage_i64_at(usage, &["prompt_tokens_details", "cache_creation_tokens"])
             + usage_i64_at(usage, &["cache_creation_input_tokens"]);
+    let reasoning_tokens = usage_i64_at(usage, &["completion_tokens_details", "reasoning_tokens"])
+        + usage_i64_at(usage, &["output_tokens_details", "reasoning_tokens"]);
     UsageTokens {
         prompt_tokens,
         completion_tokens,
         cache_read_tokens,
         cache_write_tokens,
+        reasoning_tokens,
     }
+}
+
+fn clean_reasoning_effort(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    Some(value.to_ascii_lowercase())
+}
+
+fn extract_reasoning_meta(body: &Value) -> ReasoningMeta {
+    if let Some(effort) = body
+        .get("reasoning_effort")
+        .and_then(Value::as_str)
+        .and_then(clean_reasoning_effort)
+    {
+        return ReasoningMeta {
+            effort: Some(effort),
+            source: Some("reasoning_effort"),
+            budget_tokens: None,
+        };
+    }
+
+    if let Some(effort) = body
+        .get("reasoning")
+        .and_then(|reasoning| reasoning.get("effort"))
+        .and_then(Value::as_str)
+        .and_then(clean_reasoning_effort)
+    {
+        return ReasoningMeta {
+            effort: Some(effort),
+            source: Some("reasoning.effort"),
+            budget_tokens: None,
+        };
+    }
+
+    if let Some(budget_tokens) = body
+        .get("thinking")
+        .and_then(|thinking| thinking.get("budget_tokens"))
+        .and_then(Value::as_i64)
+        .filter(|tokens| *tokens > 0)
+    {
+        return ReasoningMeta {
+            effort: None,
+            source: Some("thinking.budget_tokens"),
+            budget_tokens: Some(budget_tokens),
+        };
+    }
+
+    ReasoningMeta::default()
 }
 
 fn request_uses_structured_output(body: &Value) -> bool {
@@ -854,6 +930,7 @@ fn build_streaming_response(
     request_start: std::time::Instant,
     prior_attempts: Vec<AttemptInfo>,
     append_model_info: bool,
+    reasoning_meta: ReasoningMeta,
     middleware: &[Arc<dyn super::middleware::ForwarderMiddleware>],
     ctx: &RequestContext,
 ) -> axum::response::Response {
@@ -874,6 +951,7 @@ fn build_streaming_response(
     let completion_tokens = Arc::new(AtomicI64::new(0));
     let cache_read_tokens = Arc::new(AtomicI64::new(0));
     let cache_write_tokens = Arc::new(AtomicI64::new(0));
+    let reasoning_tokens = Arc::new(AtomicI64::new(0));
     let has_sse_error = Arc::new(AtomicBool::new(false));
     let chunk_count = Arc::new(AtomicI64::new(0));
     let streamed_bytes = Arc::new(AtomicI64::new(0));
@@ -908,6 +986,8 @@ fn build_streaming_response(
         completion_tokens: completion_tokens.clone(),
         cache_read_tokens: cache_read_tokens.clone(),
         cache_write_tokens: cache_write_tokens.clone(),
+        reasoning_tokens: reasoning_tokens.clone(),
+        reasoning_meta: reasoning_meta.clone(),
         first_token_ms: first_token_ms.clone(),
         chunk_count: chunk_count.clone(),
         streamed_bytes: streamed_bytes.clone(),
@@ -952,8 +1032,10 @@ fn build_streaming_response(
                     let ct = completion_tokens.load(Ordering::SeqCst);
                     let cr = cache_read_tokens.load(Ordering::SeqCst);
                     let cw = cache_write_tokens.load(Ordering::SeqCst);
+                    let rt = reasoning_tokens.load(Ordering::SeqCst);
                     let ft = first_token_ms.load(Ordering::SeqCst);
                     let lat = start.elapsed().as_millis() as i64;
+                    let reasoning_meta = reasoning_meta.clone();
                     tokio::spawn(async move {
                         log_usage(
                             &db2,
@@ -966,6 +1048,8 @@ fn build_streaming_response(
                             ct,
                             cr,
                             cw,
+                            rt,
+                            &reasoning_meta,
                             ft,
                             lat,
                             504,
@@ -1028,8 +1112,10 @@ fn build_streaming_response(
                             let ct = completion_tokens.load(Ordering::SeqCst);
                             let cr = cache_read_tokens.load(Ordering::SeqCst);
                             let cw = cache_write_tokens.load(Ordering::SeqCst);
+                            let rt = reasoning_tokens.load(Ordering::SeqCst);
                             let ft = first_token_ms.load(Ordering::SeqCst);
                             let lat = start.elapsed().as_millis() as i64;
+                            let reasoning_meta = reasoning_meta.clone();
                             tokio::spawn(async move {
                                 log_usage(
                                     &db2,
@@ -1042,6 +1128,8 @@ fn build_streaming_response(
                                     ct,
                                     cr,
                                     cw,
+                                    rt,
+                                    &reasoning_meta,
                                     ft,
                                     lat,
                                     413,
@@ -1079,6 +1167,7 @@ fn build_streaming_response(
                             &completion_tokens,
                             &cache_read_tokens,
                             &cache_write_tokens,
+                            &reasoning_tokens,
                             &has_text_delta,
                             &has_tool_calls,
                             append_model_info.then_some(entry.model.as_str()),
@@ -1104,6 +1193,7 @@ fn build_streaming_response(
                             &completion_tokens,
                             &cache_read_tokens,
                             &cache_write_tokens,
+                            &reasoning_tokens,
                             &has_sse_error,
                             &has_text_delta,
                             &has_tool_calls,
@@ -1133,6 +1223,7 @@ fn build_streaming_response(
                         let ct = completion_tokens.load(Ordering::SeqCst);
                         let cr = cache_read_tokens.load(Ordering::SeqCst);
                         let cw = cache_write_tokens.load(Ordering::SeqCst);
+                        let rt = reasoning_tokens.load(Ordering::SeqCst);
                         let has_text_output = has_text_delta.load(Ordering::SeqCst);
                         let has_tool_output = has_tool_calls.load(Ordering::SeqCst);
                         let has_error = has_sse_error.load(Ordering::SeqCst);
@@ -1186,6 +1277,7 @@ fn build_streaming_response(
                         let rm2 = requested_model.clone();
                         let cf2 = client_fingerprint.clone();
                         let cua2 = client_user_agent.clone();
+                        let reasoning_meta = reasoning_meta.clone();
                         tokio::spawn(async move {
                             log_usage(
                                 &db2,
@@ -1198,6 +1290,8 @@ fn build_streaming_response(
                                 ct,
                                 cr,
                                 cw,
+                                rt,
+                                &reasoning_meta,
                                 ft,
                                 lat,
                                 502,
@@ -1232,6 +1326,7 @@ fn build_streaming_response(
                         let ct = completion_tokens.load(Ordering::SeqCst);
                         let cr = cache_read_tokens.load(Ordering::SeqCst);
                         let cw = cache_write_tokens.load(Ordering::SeqCst);
+                        let rt = reasoning_tokens.load(Ordering::SeqCst);
                         let has_error = has_sse_error.load(Ordering::SeqCst);
                         let chunk_total = chunk_count.load(Ordering::SeqCst);
                         let byte_total = streamed_bytes.load(Ordering::SeqCst);
@@ -1298,6 +1393,7 @@ fn build_streaming_response(
                         let eah = entries_app_handle.clone();
                         let cf2 = client_fingerprint.clone();
                         let cua2 = client_user_agent.clone();
+                        let reasoning_meta = reasoning_meta.clone();
                         tokio::spawn(async move {
                             log_usage(
                                 &db2,
@@ -1310,6 +1406,8 @@ fn build_streaming_response(
                                 ct,
                                 cr,
                                 cw,
+                                rt,
+                                &reasoning_meta,
                                 ft,
                                 lat,
                                 sc,
@@ -1463,6 +1561,7 @@ fn transform_sse_chunk(
         completion_tokens,
         &Arc::new(AtomicI64::new(0)),
         &Arc::new(AtomicI64::new(0)),
+        &Arc::new(AtomicI64::new(0)),
         has_text_delta,
         has_tool_calls,
         model_info,
@@ -1479,6 +1578,7 @@ fn transform_sse_chunk_with_cache(
     completion_tokens: &Arc<AtomicI64>,
     cache_read_tokens: &Arc<AtomicI64>,
     cache_write_tokens: &Arc<AtomicI64>,
+    reasoning_tokens: &Arc<AtomicI64>,
     has_text_delta: &Arc<AtomicBool>,
     has_tool_calls: &Arc<AtomicBool>,
     model_info: Option<&str>,
@@ -1532,6 +1632,9 @@ fn transform_sse_chunk_with_cache(
                         cache_write_tokens
                             .store(usage_tokens.cache_write_tokens, Ordering::Relaxed);
                     }
+                    if usage_tokens.reasoning_tokens > 0 {
+                        reasoning_tokens.store(usage_tokens.reasoning_tokens, Ordering::Relaxed);
+                    }
                     if stream_chunk_has_text_delta(&value) {
                         has_text_delta.store(true, Ordering::Relaxed);
                     }
@@ -1577,6 +1680,7 @@ fn append_and_parse_sse(
         completion_tokens,
         &Arc::new(AtomicI64::new(0)),
         &Arc::new(AtomicI64::new(0)),
+        &Arc::new(AtomicI64::new(0)),
         has_sse_error,
         has_text_delta,
         has_tool_calls,
@@ -1593,6 +1697,7 @@ fn append_and_parse_sse_with_cache(
     completion_tokens: &Arc<AtomicI64>,
     cache_read_tokens: &Arc<AtomicI64>,
     cache_write_tokens: &Arc<AtomicI64>,
+    reasoning_tokens: &Arc<AtomicI64>,
     has_sse_error: &Arc<AtomicBool>,
     has_text_delta: &Arc<AtomicBool>,
     has_tool_calls: &Arc<AtomicBool>,
@@ -1653,6 +1758,9 @@ fn append_and_parse_sse_with_cache(
             }
             if usage_tokens.cache_write_tokens > 0 {
                 cache_write_tokens.store(usage_tokens.cache_write_tokens, Ordering::Relaxed);
+            }
+            if usage_tokens.reasoning_tokens > 0 {
+                reasoning_tokens.store(usage_tokens.reasoning_tokens, Ordering::Relaxed);
             }
         }
     }
@@ -1937,6 +2045,8 @@ fn log_usage(
     completion_tokens: i64,
     cache_read_tokens: i64,
     cache_write_tokens: i64,
+    reasoning_tokens: i64,
+    reasoning_meta: &ReasoningMeta,
     first_token_ms: i64,
     latency_ms: i64,
     status_code: i32,
@@ -1961,6 +2071,10 @@ fn log_usage(
         "success": success,
         "cache_read_tokens": cache_read_tokens,
         "cache_write_tokens": cache_write_tokens,
+        "reasoning_tokens": reasoning_tokens,
+        "reasoning_effort": reasoning_meta.effort,
+        "reasoning_effort_source": reasoning_meta.source,
+        "thinking_budget_tokens": reasoning_meta.budget_tokens,
         "client_fingerprint": client_fingerprint,
         "client_user_agent": client_user_agent,
         "attempt_path": attempt_path.and_then(|path| serde_json::from_str::<Value>(path).ok()),
@@ -2076,6 +2190,36 @@ mod tests {
     use super::*;
     use crate::proxy::protocol::get_adapter;
 
+    #[test]
+    fn extract_reasoning_meta_supports_common_request_shapes() {
+        let meta = extract_reasoning_meta(&serde_json::json!({"reasoning_effort": " High "}));
+        assert_eq!(meta.effort.as_deref(), Some("high"));
+        assert_eq!(meta.source, Some("reasoning_effort"));
+
+        let meta = extract_reasoning_meta(&serde_json::json!({"reasoning": {"effort": "low"}}));
+        assert_eq!(meta.effort.as_deref(), Some("low"));
+        assert_eq!(meta.source, Some("reasoning.effort"));
+
+        let meta = extract_reasoning_meta(&serde_json::json!({"thinking": {"budget_tokens": 32768}}));
+        assert_eq!(meta.budget_tokens, Some(32768));
+        assert_eq!(meta.source, Some("thinking.budget_tokens"));
+    }
+
+    #[test]
+    fn extract_usage_tokens_includes_reasoning_tokens() {
+        let usage = extract_usage_tokens(&serde_json::json!({
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 20,
+                "completion_tokens_details": {"reasoning_tokens": 3},
+                "output_tokens_details": {"reasoning_tokens": 4}
+            }
+        }));
+
+        assert_eq!(usage.prompt_tokens, 10);
+        assert_eq!(usage.completion_tokens, 20);
+        assert_eq!(usage.reasoning_tokens, 7);
+    }
     #[test]
     fn transformed_sse_chunks_are_standard_sse_frames() {
         let adapter = get_adapter("claude");

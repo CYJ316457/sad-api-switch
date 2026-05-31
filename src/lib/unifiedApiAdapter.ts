@@ -25,6 +25,7 @@ import type {
   TestChatResponse,
   TranslationRelayPayload,
   TranslationRelayRequest,
+  AppBackupPayload,
 } from '../types';
 import { ADMIN_API_PREFIX } from './adminApiConfig';
 import { clearToken, emitAuthExpired, TOKEN_KEY } from './webAuth';
@@ -433,6 +434,16 @@ export const apiAdapter: ApiAdapter = {
         : webRequest<void>('PUT', `/tokens/${id}/models`, { allowed_models: allowedModels }),
   },
 
+  backup: {
+    export: () =>
+      useTauri()
+        ? tauriCmd<AppBackupPayload>('export_app_backup')
+        : webRequest<AppBackupPayload>('GET', '/backup'),
+    import: (payload) =>
+      useTauri()
+        ? tauriCmd<void>('import_app_backup', { payload })
+        : webRequest<void>('POST', '/backup', payload),
+  },
   settings: {
     get: () =>
       useTauri()

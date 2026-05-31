@@ -1,4 +1,5 @@
-use crate::admin::auth::require_auth;
+﻿use crate::admin::auth::require_auth;
+use crate::admin::backup_handlers;
 use crate::admin::channel_handlers;
 use crate::admin::chat_handlers;
 use crate::admin::cors::apply_admin_cors;
@@ -18,6 +19,10 @@ pub fn build_admin_router(state: AdminState) -> Router {
         .route("/admin/logout", post(handlers::logout))
         .route("/admin/status", get(handlers::status))
         .route("/admin/audit-logs", get(handlers::audit_logs))
+        .route(
+            "/admin/backup",
+            get(backup_handlers::export_backup).post(backup_handlers::import_backup),
+        )
         .route(
             "/admin/settings",
             get(handlers::get_settings)

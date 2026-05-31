@@ -44,11 +44,15 @@ export interface ApiAdapter {
     toggle(id: string, enabled: boolean): Promise<void>;
     updateModels(id: string, allowedModels: string[] | null): Promise<void>;
   };
-settings: {
+  backup: {
+    export(): Promise<AppBackupPayload>;
+    import(payload: AppBackupPayload): Promise<void>;
+  };
+  settings: {
     get(): Promise<AppSettings>;
     update(settings: AppSettings): Promise<void>;
     patchSettings(patch: Partial<AppSettings>): Promise<AppSettings>;
-};
+  };
   proxy: {
     getStatus(): Promise<ProxyStatus>;
     start(): Promise<ProxyStatus>;
@@ -66,4 +70,4 @@ settings: {
 
 // Types referenced above – import from shared definitions
 import type { Channel, CreateChannelParams, UpdateChannelParams, FetchModelsResult, ProbeResult, TestChannelResult, ModelInfo, ModelCatalogMetaUpdate } from '../features/channels/types';
-import type { DashboardFilter, DashboardStats, ChartDataPoint, ModelRanking, UsageLog, UsageLogFilter, PaginatedResult, ApiEntry, AccessKey, AppSettings, ProxyStatus, AdminStatus, TestChatResponse, TranslationRelayPayload, TranslationRelayRequest } from '../types';
+import type { DashboardFilter, DashboardStats, ChartDataPoint, ModelRanking, UsageLog, UsageLogFilter, PaginatedResult, ApiEntry, AccessKey, AppSettings, ProxyStatus, AdminStatus, TestChatResponse, TranslationRelayPayload, TranslationRelayRequest, AppBackupPayload } from '../types';

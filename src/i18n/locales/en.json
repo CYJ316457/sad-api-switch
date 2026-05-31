@@ -276,6 +276,7 @@
     "firstToken": "First Token(ms)",
     "promptTokens": "Input",
     "completionTokens": "Output",
+    "reasoning": "Reasoning",
     "totalTokens": "Total Tokens",
     "cost": "Cost",
     "status": "Status",
@@ -414,6 +415,15 @@
   },
   "settings": {
     "title": "Settings",
+    "backup": {
+      "import": "Import",
+      "importing": "Importing...",
+      "export": "Export",
+      "importSuccess": "Settings imported",
+      "importFailed": "Failed to import settings",
+      "exportSuccess": "Settings exported",
+      "exportFailed": "Failed to export settings"
+    },
     "proxy": {
       "title": "Proxy Settings",
       "enabled": "Enable Proxy",

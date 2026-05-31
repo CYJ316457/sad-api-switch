@@ -251,6 +251,15 @@ export interface VersionedAppSettings extends AppSettings {
   _version: number;
 }
 
+export interface AppBackupPayload {
+  version: number;
+  exported_at: string;
+  settings: AppSettings;
+  channels: Channel[];
+  api_entries: ApiEntry[];
+  access_keys: AccessKey[];
+}
+
 export const DEFAULT_SETTINGS: VersionedAppSettings = {
   proxy_enabled: false,
   listen_port: 9090,

@@ -276,6 +276,7 @@
     "firstToken": "首Token(ms)",
     "promptTokens": "输入",
     "completionTokens": "输出",
+    "reasoning": "思考",
     "totalTokens": "总Token",
     "cost": "花费",
     "status": "状态",
@@ -414,6 +415,15 @@
   },
   "settings": {
     "title": "系统设置",
+    "backup": {
+      "import": "一键导入",
+      "importing": "导入中...",
+      "export": "一键导出",
+      "importSuccess": "设置导入成功",
+      "importFailed": "导入设置失败",
+      "exportSuccess": "设置导出成功",
+      "exportFailed": "导出设置失败"
+    },
     "proxy": {
       "title": "代理设置",
       "enabled": "启用代理",

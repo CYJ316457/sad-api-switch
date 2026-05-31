@@ -14,6 +14,10 @@ interface UsageLogMeta {
   resolved_model?: string;
   cache_read_tokens?: number;
   cache_write_tokens?: number;
+  reasoning_tokens?: number;
+  reasoning_effort?: string;
+  reasoning_effort_source?: string;
+  thinking_budget_tokens?: number;
   client_fingerprint?: string;
   client_user_agent?: string;
   attempt_path?: Array<{
@@ -35,6 +39,7 @@ type LogColumnKey =
   | "duration"
   | "prompt"
   | "completion"
+  | "reasoning"
   | "status"
   | "fingerprint";
 
@@ -49,6 +54,7 @@ const DEFAULT_COLUMN_WIDTHS: LogColumnWidths = {
   duration: 64,
   prompt: 176,
   completion: 64,
+  reasoning: 72,
   status: 64,
   fingerprint: 96,
 };
@@ -60,6 +66,7 @@ const MIN_COLUMN_WIDTHS: LogColumnWidths = {
   duration: 64,
   prompt: 120,
   completion: 64,
+  reasoning: 64,
   status: 56,
   fingerprint: 72,
 };
@@ -89,6 +96,16 @@ function cacheRate(cacheReadTokens: number, promptTokens: number): string {
   return ((cacheReadTokens / promptTokens) * 100).toFixed(1);
 }
 
+function formatReasoning(meta: UsageLogMeta | null): string {
+  if (meta?.reasoning_effort) return meta.reasoning_effort;
+  if ((meta?.thinking_budget_tokens ?? 0) > 0) {
+    return formatTokenCount(meta?.thinking_budget_tokens ?? 0);
+  }
+  if ((meta?.reasoning_tokens ?? 0) > 0) {
+    return formatTokenCount(meta?.reasoning_tokens ?? 0);
+  }
+  return "-";
+}
 function shortTokenName(log: { token_name?: string; access_key_name?: string }): string {
   const value = log.token_name || log.access_key_name || "";
   return value.length > 5 ? value.slice(0, 5) : value;
@@ -279,6 +296,7 @@ export function LogPage() {
               <col style={{ width: `${columnWidths.duration}px` }} />
               <col style={{ width: `${columnWidths.prompt}px` }} />
               <col style={{ width: `${columnWidths.completion}px` }} />
+              <col style={{ width: `${columnWidths.reasoning}px` }} />
               <col style={{ width: `${columnWidths.status}px` }} />
               <col style={{ width: `${columnWidths.fingerprint}px` }} />
             </colgroup>
@@ -291,6 +309,7 @@ export function LogPage() {
                 <th className="whitespace-nowrap px-3 py-2 text-left font-medium"><div className="h-4 w-16 animate-pulse rounded bg-muted" /></th>
                 <th className="px-3 py-2 text-right font-medium"><div className="ml-auto h-4 w-12 animate-pulse rounded bg-muted" /></th>
                 <th className="px-3 py-2 text-right font-medium"><div className="ml-auto h-4 w-12 animate-pulse rounded bg-muted" /></th>
+                <th className="whitespace-nowrap px-3 py-2 text-left font-medium"><div className="h-4 w-12 animate-pulse rounded bg-muted" /></th>
                 <th className="whitespace-nowrap px-3 py-2 text-left font-medium"><div className="h-4 w-14 animate-pulse rounded bg-muted" /></th>
                 <th className="whitespace-nowrap px-3 py-2 text-left font-medium"><div className="h-4 w-14 animate-pulse rounded bg-muted" /></th>
               </tr>
@@ -305,6 +324,7 @@ export function LogPage() {
                   <td className="whitespace-nowrap px-3 py-2"><div className="h-4 w-20 animate-pulse rounded bg-muted" /></td>
                   <td className="px-3 py-2 text-right"><div className="ml-auto h-4 w-10 animate-pulse rounded bg-muted" /></td>
                   <td className="px-3 py-2 text-right"><div className="ml-auto h-4 w-10 animate-pulse rounded bg-muted" /></td>
+                  <td className="whitespace-nowrap px-3 py-2"><div className="h-4 w-10 animate-pulse rounded bg-muted" /></td>
                   <td className="whitespace-nowrap px-3 py-2"><div className="h-4 w-12 animate-pulse rounded bg-muted" /></td>
                   <td className="whitespace-nowrap px-3 py-2"><div className="h-4 w-12 animate-pulse rounded bg-muted" /></td>
                 </tr>
@@ -390,6 +410,7 @@ export function LogPage() {
             <col style={{ width: `${columnWidths.duration}px` }} />
             <col style={{ width: `${columnWidths.prompt}px` }} />
             <col style={{ width: `${columnWidths.completion}px` }} />
+            <col style={{ width: `${columnWidths.reasoning}px` }} />
             <col style={{ width: `${columnWidths.status}px` }} />
             <col style={{ width: `${columnWidths.fingerprint}px` }} />
           </colgroup>
@@ -402,6 +423,7 @@ export function LogPage() {
               <ColumnHeader width={columnWidths.duration} onResizeStart={startResize("duration")} className="whitespace-nowrap">{t("log.duration")}</ColumnHeader>
               <ColumnHeader width={columnWidths.prompt} onResizeStart={startResize("prompt")} className="text-right">{t("log.promptTokens")}</ColumnHeader>
               <ColumnHeader width={columnWidths.completion} onResizeStart={startResize("completion")} className="text-right">{t("log.completionTokens")}</ColumnHeader>
+              <ColumnHeader width={columnWidths.reasoning} onResizeStart={startResize("reasoning")} className="whitespace-nowrap">{t("log.reasoning")}</ColumnHeader>
               <ColumnHeader width={columnWidths.status} onResizeStart={startResize("status")} className="whitespace-nowrap">{t("log.status")}</ColumnHeader>
               <ColumnHeader width={columnWidths.fingerprint} onResizeStart={startResize("fingerprint")} className="whitespace-nowrap">{t("log.fingerprint")}</ColumnHeader>
             </tr>
@@ -416,6 +438,7 @@ export function LogPage() {
               const cacheReadTokens = meta?.cache_read_tokens ?? 0;
               const cacheWriteTokens = meta?.cache_write_tokens ?? 0;
               const fingerprint = meta?.client_fingerprint ?? "";
+              const reasoningLabel = formatReasoning(meta);
               const fingerprintTitle =
                 meta?.client_user_agent || fingerprint || t("log.unknown");
 
@@ -484,6 +507,9 @@ export function LogPage() {
                     <td className="px-3 py-2 text-right">
                       {formatTokenCount(log.completion_tokens)}
                     </td>
+                    <td className="whitespace-nowrap px-3 py-2 text-xs">
+                      <span title={reasoningLabel}>{reasoningLabel}</span>
+                    </td>
                     <td className="whitespace-nowrap px-3 py-2">
                       <span className={log.success ? "text-green-600" : "text-red-500"}>
                         {log.success ? t("log.success") : t("log.failed")}
@@ -501,7 +527,7 @@ export function LogPage() {
                   </tr>
                   {isExpanded ? (
                     <tr className="border-b bg-muted/20">
-                      <td colSpan={9} className="px-4 py-3">
+                      <td colSpan={10} className="px-4 py-3">
                         <div className="max-w-3xl space-y-2 text-xs">
                           {meta ? (
                             <div className="grid gap-1 rounded bg-background/60 p-2 text-muted-foreground">
@@ -513,6 +539,13 @@ export function LogPage() {
                                 <span className="font-medium">{t("log.resolvedModel")}:</span>{" "}
                                 {resolvedModel || "-"}
                               </div>
+                              {reasoningLabel !== "-" ? (
+                                <div>
+                                  <span className="font-medium">{t("log.reasoning")}:</span>{" "}
+                                  {reasoningLabel}
+                                  {meta.reasoning_effort_source ? ` (${meta.reasoning_effort_source})` : ""}
+                                </div>
+                              ) : null}
                               {fingerprint ? (
                                 <div>
                                   <span className="font-medium">{t("log.fingerprint")}:</span>{" "}
