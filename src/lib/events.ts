@@ -9,6 +9,7 @@
  * without touching any page-level code.
  */
 
+import { useEffect, useRef } from "react";
 import { isTauriRuntime } from "./useApiAdapter";
 
 // ============================================================================
@@ -56,6 +57,7 @@ export interface EventManager {
 class DesktopEventManager implements EventManager {
   private subscriptions = new Map<EventName, Set<EventHandler>>();
   private unlistenFns = new Map<EventName, () => void>();
+  private pendingListeners = new Set<EventName>();
 
   isActive(): boolean {
     return isTauriRuntime();
@@ -73,18 +75,7 @@ class DesktopEventManager implements EventManager {
     }
     this.subscriptions.get(eventName)!.add(callback);
 
-    // Set up Tauri listener only once per event name
-    if (!this.unlistenFns.has(eventName)) {
-      import("@tauri-apps/api/event")
-        .then(({ listen }) =>
-          listen(eventName, () => {
-            this.subscriptions.get(eventName)?.forEach((cb) => cb());
-          })
-        )
-        .catch(() => {
-          // Silently fail when event API is unavailable
-        });
-    }
+    this.ensureListener(eventName);
 
     // Return unsubscribe function
     return () => {
@@ -102,6 +93,35 @@ class DesktopEventManager implements EventManager {
         }
       }
     };
+  }
+
+  private ensureListener(eventName: EventName): void {
+    if (this.unlistenFns.has(eventName) || this.pendingListeners.has(eventName)) {
+      return;
+    }
+
+    this.pendingListeners.add(eventName);
+
+    import("@tauri-apps/api/event")
+      .then(async ({ listen }) => {
+        const unlisten = await listen(eventName, () => {
+          this.subscriptions.get(eventName)?.forEach((cb) => cb());
+        });
+
+        const handlers = this.subscriptions.get(eventName);
+        if (!handlers || handlers.size === 0) {
+          unlisten();
+          return;
+        }
+
+        this.unlistenFns.set(eventName, unlisten);
+      })
+      .catch(() => {
+        // Silently fail when event API is unavailable
+      })
+      .finally(() => {
+        this.pendingListeners.delete(eventName);
+      });
   }
 }
 
@@ -144,12 +164,6 @@ export function isEventSystemActive(): boolean {
   return getEventManager().isActive();
 }
 
-// ============================================================================
-// React Hook Wrapper
-// ============================================================================
-
-import { useEffect } from "react";
-
 /**
  * React hook for subscribing to events.
  * Automatically handles subscription lifecycle.
@@ -158,8 +172,13 @@ import { useEffect } from "react";
  * @param callback Handler invoked when the event fires
  */
 export function useEvent(eventName: EventName, callback: EventHandler): void {
+  const callbackRef = useRef(callback);
+  callbackRef.current = callback;
+
   useEffect(() => {
-    const unsubscribe = onEvent(eventName, callback);
+    const unsubscribe = onEvent(eventName, () => {
+      callbackRef.current();
+    });
     return unsubscribe;
-  }, [eventName, callback]);
+  }, [eventName]);
 }

@@ -550,7 +550,7 @@ export function LogPage() {
                               <pre className="whitespace-pre-wrap break-all">{log.content}</pre>
                             </div>
                           ) : null}
-                          {log.error_message ? (
+                          {!log.success && log.error_message ? (
                             <div>
                               <div className="mb-1 font-medium text-red-500">
                                 {t("log.error")}
@@ -560,7 +560,7 @@ export function LogPage() {
                               </pre>
                             </div>
                           ) : null}
-                          {!log.content && !log.error_message && !log.other ? (
+                          {!log.content && (!log.error_message || log.success) && !log.other ? (
                             <span className="text-muted-foreground">{t("log.noError")}</span>
                           ) : null}
                         </div>

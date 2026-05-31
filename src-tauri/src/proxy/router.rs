@@ -113,9 +113,9 @@ fn prefer_locked_entries(entries: Vec<ApiEntry>) -> Vec<ApiEntry> {
 /// 1. Trim request.model and replace empty string with `auto`.
 /// 2. Case-insensitive group exact match.
 /// 3. Case-insensitive model exact match.
-/// 4. Case-insensitive model fuzzy match where `entry.model` contains `request.model`.
-/// 5. Fallback to the AUTO group (`group_name == "auto"`).
-/// 6. Return no-provider if the AUTO group is empty.
+/// 4. Case-insensitive display_name exact match.
+/// 5. Only `auto` may fall back to the AUTO group.
+/// 6. Concrete model-name requests never fuzzy match or cross-name fallback.
 pub async fn resolve(
     model: &str,
     all_entries: &[ApiEntry],
@@ -144,7 +144,6 @@ pub async fn resolve(
 
     let normalized_model_lower = normalized_model.to_ascii_lowercase();
 
-    // 2.5 Exact model name match (case-insensitive)
     let exact_model_matches: Vec<ApiEntry> = all_available
         .iter()
         .filter(|entry| entry.model.to_ascii_lowercase() == normalized_model_lower)
@@ -154,7 +153,6 @@ pub async fn resolve(
         return prefer_locked_entries(exact_model_matches);
     }
 
-    // 2.7 Exact alias (display_name) match (case-insensitive)
     let alias_matches: Vec<ApiEntry> = all_available
         .iter()
         .filter(|entry| {
@@ -167,18 +165,8 @@ pub async fn resolve(
         return prefer_locked_entries(alias_matches);
     }
 
-    let model_matches: Vec<ApiEntry> = all_available
-        .iter()
-        .filter(|entry| {
-            entry
-                .model
-                .to_ascii_lowercase()
-                .contains(&normalized_model_lower)
-        })
-        .cloned()
-        .collect();
-    if !model_matches.is_empty() {
-        return prefer_locked_entries(model_matches);
+    if normalized_model != "auto" {
+        return Vec::new();
     }
 
     let auto_available = available_entries(auto_entries, &breakers);
@@ -194,7 +182,7 @@ pub async fn resolve(
         .collect()
 }
 
-/// Apply sort mode to entries: "custom" → sort_index, "fastest" → latency, "latest" → release_date.
+/// Apply sort mode to entries: "custom" -> sort_index, "fastest" -> latency, "latest" -> release_date.
 pub(crate) fn apply_sort_mode(entries: &mut [ApiEntry], sort_mode: &str) {
     match sort_mode {
         "fastest" => sort_by_latency(entries),
@@ -202,7 +190,6 @@ pub(crate) fn apply_sort_mode(entries: &mut [ApiEntry], sort_mode: &str) {
         _ => sort_by_index(entries),
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,7 +280,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn group_match_takes_priority_over_fuzzy_model_match() {
+    async fn group_exact_match_takes_priority_over_other_model_names() {
         let breakers = RwLock::new(HashMap::new());
         let all = vec![
             entry_with_group("group-match", "unrelated-model", true, 0, "coding"),
@@ -309,20 +296,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exact_model_match_takes_priority_over_fuzzy_model_match() {
+    async fn exact_model_match_does_not_include_other_names() {
         let breakers = RwLock::new(HashMap::new());
         let all = vec![
-            // exact match (lower priority)
             entry_with_group("fuzzy-first", "gpt-4o-plus", true, 0, "other"),
-            // exact match should win even with higher sort_index
             entry_with_group("exact-match", "gpt-4o", true, 5, "other"),
-            // fuzzy match (higher priority)
             entry_with_group("fuzzy-second", "gpt-4o-mini", true, 1, "other"),
         ];
 
         let resolved = resolve("gpt-4o", &all, &all, &breakers, "custom").await;
 
-        // Only exact match should be returned, fuzzy excluded
         assert_eq!(
             resolved.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
             vec!["exact-match"]
@@ -373,7 +356,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn model_fuzzy_match_is_case_insensitive() {
+    async fn display_name_exact_match_is_case_insensitive() {
+        let breakers = RwLock::new(HashMap::new());
+        let mut aliased = entry_with_group("aliased", "provider/gpt-4o-mini", true, 0, "other");
+        aliased.display_name = "Client-Model".to_string();
+        let all = vec![aliased];
+
+        let resolved = resolve("client-model", &all, &all, &breakers, "custom").await;
+
+        assert_eq!(
+            resolved.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+            vec!["aliased"]
+        );
+    }
+
+    #[tokio::test]
+    async fn concrete_model_request_does_not_fuzzy_match_other_names() {
         let breakers = RwLock::new(HashMap::new());
         let all = vec![
             entry_with_group("match1", "[aa]GPT-4O-Mini", true, 0, "other"),
@@ -383,14 +381,11 @@ mod tests {
 
         let resolved = resolve("gPt-4O", &all, &all, &breakers, "custom").await;
 
-        assert_eq!(
-            resolved.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
-            vec!["match1", "match2"]
-        );
+        assert!(resolved.is_empty());
     }
 
     #[tokio::test]
-    async fn falls_back_to_auto_group_when_no_group_or_model_match() {
+    async fn auto_request_falls_back_to_auto_group() {
         let breakers = RwLock::new(HashMap::new());
         let all = vec![
             entry_with_group("auto-first", "gpt-4o", true, 0, "AUTO"),
@@ -399,7 +394,7 @@ mod tests {
         ];
         let auto = all.clone();
 
-        let resolved = resolve("missing-model", &all, &auto, &breakers, "custom").await;
+        let resolved = resolve("auto", &all, &auto, &breakers, "custom").await;
 
         assert_eq!(
             resolved.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
@@ -408,12 +403,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn returns_no_provider_when_auto_group_is_empty() {
+    async fn concrete_model_request_returns_no_provider_when_unmatched() {
+        let breakers = RwLock::new(HashMap::new());
+        let all = vec![entry_with_group("auto", "gpt-4o", true, 0, "auto")];
+
+        let resolved = resolve("missing-model", &all, &all, &breakers, "custom").await;
+
+        assert!(resolved.is_empty());
+    }
+
+    #[tokio::test]
+    async fn auto_request_returns_no_provider_when_auto_group_is_empty() {
         let breakers = RwLock::new(HashMap::new());
         let all = vec![entry_with_group("other", "claude-3", true, 0, "other")];
         let auto = all.clone();
 
-        let resolved = resolve("missing-model", &all, &auto, &breakers, "custom").await;
+        let resolved = resolve("auto", &all, &auto, &breakers, "custom").await;
 
         assert!(resolved.is_empty());
     }
@@ -433,7 +438,7 @@ mod tests {
             guard.insert("open-auto".to_string(), cb);
         }
 
-        let resolved = resolve("missing-model", &all, &auto, &breakers, "custom").await;
+        let resolved = resolve("auto", &all, &auto, &breakers, "custom").await;
 
         assert_eq!(
             resolved.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
@@ -450,7 +455,7 @@ mod tests {
         let all = vec![cooled, healthy.clone()];
         let auto = all.clone();
 
-        let resolved = resolve("missing-model", &all, &auto, &breakers, "custom").await;
+        let resolved = resolve("auto", &all, &auto, &breakers, "custom").await;
 
         assert_eq!(
             resolved.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
@@ -511,3 +516,4 @@ mod tests {
         );
     }
 }
+

@@ -1949,6 +1949,7 @@ fn log_usage(
 ) {
     let log_type = if success { 2 } else { 5 };
     let content = error_message.unwrap_or("");
+    let stored_error_message = usage_error_message(success, error_message);
     let token_name = access_key.map(|ak| ak.name.as_str()).unwrap_or("NONE");
     let use_time = ((latency_ms as f64) / 1000.0).ceil() as i64;
     let other = serde_json::json!({
@@ -1990,7 +1991,7 @@ fn log_usage(
         "",
         "default",
         &other,
-        error_message,
+        stored_error_message,
         None,
     );
 
@@ -1998,6 +1999,14 @@ fn log_usage(
         let _ = h.emit("new-usage-log", ());
     }
     crate::state_version::bump();
+}
+
+fn usage_error_message<'a>(success: bool, message: Option<&'a str>) -> Option<&'a str> {
+    if success {
+        None
+    } else {
+        message
+    }
 }
 
 fn client_user_agent(headers: &HeaderMap) -> Option<String> {
@@ -2839,5 +2848,14 @@ data: [DONE]\n"
             }]
         });
         assert!(stream_chunk_has_tool_calls(&message_function_call));
+    }
+
+    #[test]
+    fn successful_usage_keeps_diagnostics_out_of_error_message() {
+        let diagnostic = "Stream diagnostic: {\"stage\":\"stream_dropped\",\"stream_success\":true}";
+
+        assert_eq!(usage_error_message(true, Some(diagnostic)), None);
+        assert_eq!(usage_error_message(false, Some(diagnostic)), Some(diagnostic));
+        assert_eq!(usage_error_message(false, None), None);
     }
 }
